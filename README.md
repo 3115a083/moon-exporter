@@ -1,6 +1,6 @@
 # Moon Exporter
 
-Moon Exporter is an Android migration tool for Moon+ Reader data. It is a standalone project and is not part of MoonDav.
+Moon Exporter is a standalone Android migration tool for Moon+ Reader data.
 
 ## Main capabilities
 
