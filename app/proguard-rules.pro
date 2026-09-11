@@ -1,1 +1,1 @@
--keep class de.moondav.moonexporter.** { *; }
+-keep class de.moonexporter.app.** { *; }
