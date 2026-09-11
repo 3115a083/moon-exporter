@@ -40,8 +40,10 @@ internal object KoSyncClient {
         syncable.forEachIndexed { index, book ->
             coroutineContext.ensureActive()
             onProgress(tr("Übertragung ${index + 1}/${syncable.size}: ${book.title}", "Sending ${index + 1}/${syncable.size}: ${book.title}"))
-            val percent = ((book.position?.percent ?: 0.0) / 100.0).coerceIn(0.0, 1.0)
-            val body = """{"document":${book.epub!!.partialMd5!!.jsonEscape()},"progress":${("%.2f%%".format(Locale.ROOT, book.position.percent ?: 0.0)).jsonEscape()},"percentage":${"%.6f".format(Locale.ROOT, percent)},"device":"KOReader","device_id":${config.deviceId.ifBlank { "MoonExporter" }.jsonEscape()}}"""
+            val rawPercent = book.position?.percent ?: 0.0
+            val percent = (rawPercent / 100.0).coerceIn(0.0, 1.0)
+            val document = requireNotNull(book.epub?.partialMd5)
+            val body = """{"document":${document.jsonEscape()},"progress":${("%.2f%%".format(Locale.ROOT, rawPercent)).jsonEscape()},"percentage":${"%.6f".format(Locale.ROOT, percent)},"device":"KOReader","device_id":${config.deviceId.ifBlank { "MoonExporter" }.jsonEscape()}}"""
             val response = request("PUT", endpoint, config, body)
             if (response.code !in 200..299) throw syncError(response.code, response.body)
         }
