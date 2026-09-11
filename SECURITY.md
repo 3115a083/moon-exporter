@@ -1,35 +1,24 @@
 # Security Policy
 
-Moon Exporter is an offline migration tool for local reading-progress data.
+Moon Exporter handles potentially sensitive reading data. Real user backups and derived personal data must never be committed, added to tests, logged or included in build artifacts.
 
-## Supported versions
+## Application rules
 
-Security fixes target the default branch until the first tagged release exists.
+- No analytics, telemetry or advertising.
+- Android app backups are disabled.
+- Cleartext traffic is disabled. Network sync requires HTTPS.
+- The app requests only permissions required for its operation. Current network sync requires `android.permission.INTERNET`.
+- Credentials and authorization headers must not be logged.
+- Book contents, annotations and personal filenames must not be logged.
+- ZIP paths are validated against traversal patterns and large inputs are processed with explicit limits or streaming.
+- XML input is treated as untrusted and DOCTYPE/ENTITY declarations are rejected.
+- Export cleanup may delete only files created by the current failed/cancelled export.
+- Existing user files are never silently overwritten.
 
-## Threat model
+## KOSync/CWA guarantee
 
-The app treats the selected Moon+ folder, WebDAV save folder, `.po`, `.an`, `_names.list`, `recent.list` and EPUB metadata as untrusted input.
+The KOSync/CWA workflow sends only authentication data, KOReader-compatible `partialMD5` document identifiers and reading-progress JSON. It does not upload ebook files.
 
-## Security properties
+## Tests
 
-- The Android manifest does not request `INTERNET`.
-- The app uses Android's Storage Access Framework instead of broad storage permissions.
-- It asks only for read access to source folders and files.
-- It writes only to a user-selected export document.
-- It does not export ebook files.
-- It does not follow filesystem paths from input data.
-- Export ZIP entry names are sanitized.
-- EPUB metadata extraction rejects traversal-like paths.
-- File reads are bounded to avoid memory exhaustion on unexpected input.
-- Android backup and data extraction are disabled.
-
-## Reporting a vulnerability
-
-Open a private security advisory on GitHub or contact the repository owner. Include:
-
-- affected version or commit
-- reproduction steps
-- sample input if it can be shared safely
-- expected and actual behavior
-
-Do not publish exploit details before a fix is available.
+Use synthetic fixtures only, such as `Example Book`, `Synthetic Author` and invented positions/ISBNs.
