@@ -37,7 +37,7 @@ jobs:
           grep -q 'android:usesCleartextTraffic="false"' app/src/main/AndroidManifest.xml
           ! grep -RniE 'READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE' app/src/main/AndroidManifest.xml
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MoonExporter-1.0.0-debug
           path: app/build/outputs/apk/debug/*.apk
