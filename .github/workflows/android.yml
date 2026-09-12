@@ -39,5 +39,5 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MoonExporter-1.0.1-debug
+          name: MoonExporter-1.0.2-debug
           path: app/build/outputs/apk/debug/*.apk
