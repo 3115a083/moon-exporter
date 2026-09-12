@@ -34,6 +34,8 @@ internal data class AnnotationData(
 
 internal data class EpubMatch(
     val uri: Uri? = null,
+    val backupUri: Uri? = null,
+    val archiveEntryName: String? = null,
     val embeddedPath: String? = null,
     val fileName: String,
     val title: String? = null,
@@ -59,9 +61,9 @@ internal data class BookItem(
     val includedInBackup: Boolean = false,
 ) {
     val hasAnnotations: Boolean get() = (annotation?.count ?: 0) > 0
-    val hasBookFile: Boolean get() = epub?.uri != null || epub?.embeddedPath != null
+    val hasBookFile: Boolean get() = epub?.uri != null || epub?.embeddedPath != null || (epub?.backupUri != null && !epub.archiveEntryName.isNullOrBlank())
 }
 
 internal enum class BookFilter { ALL, WITH_PROGRESS, WITHOUT_PROGRESS, WITH_BOOK }
 internal enum class ExportMode { FULL, MARKINGS_ONLY }
-internal enum class ServerType { STANDARD_KOSYNC, CALIBRE_WEB_AUTOMATED }
+internal enum class ServerType { STANDARD_KOSYNC, CALIBRE_WEB_AUTOMATED, BOOKLORE }
