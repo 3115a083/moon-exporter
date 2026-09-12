@@ -26,6 +26,6 @@ All notable Moon Exporter revisions are recorded here so future development can 
 ## 1.0.0 - 2026-09-11
 
 - Reworked Moon Exporter as a standalone Android migration app.
-- Removed legacy MoonDav package references.
+- Removed legacy package and project references from the predecessor handoff.
 - Added `.mrpro` processing, book metadata handling, Readest export and KOSync/CWA functionality.
 - Restored strict Android CI and security checks.
