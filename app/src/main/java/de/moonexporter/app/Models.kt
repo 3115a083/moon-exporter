@@ -60,7 +60,7 @@ internal data class BookItem(
     val epub: EpubMatch? = null,
     val includedInBackup: Boolean = false,
 ) {
-    val hasAnnotations: Boolean get() = (annotation?.count ?: 0) > 0
+    val hasAnnotations: Boolean get() = annotation?.records?.isNotEmpty() == true || !annotation?.originalMrexpt.isNullOrBlank()
     val hasBookFile: Boolean get() = epub?.uri != null || epub?.embeddedPath != null || (epub?.backupUri != null && !epub.archiveEntryName.isNullOrBlank())
 }
 
