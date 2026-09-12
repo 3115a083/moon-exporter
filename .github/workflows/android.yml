@@ -23,7 +23,7 @@ jobs:
           gradle-version: '8.11.1'
       - name: Privacy source scan
         run: |
-          ! grep -RniE '3115a083/MoonDav|de\.moondav|MoonDav' app README.md SECURITY.md
+          ! grep -RniE '3115a083/MoonDav|de\.moondav|MoonDav' app README.md SECURITY.md docs CHANGELOG.md
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Android lint
@@ -39,5 +39,5 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MoonExporter-1.0.0-debug
+          name: MoonExporter-1.0.3-debug
           path: app/build/outputs/apk/debug/*.apk
