@@ -2,6 +2,37 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.3 - 2026-09-12
+
+### Changed
+- Reworked the main UI around one straight migration flow: Moon+ backup -> book selection -> destination -> transfer.
+- Replaced filter chips with one filter dropdown.
+- Replaced separate export and sync areas with one destination selector for Readest, KOSync, Calibre-Web Automated or BookLore.
+- Readest now shows only file-export options. Server destinations show only connection and reading-progress controls.
+- Removed the technical Device ID and regular diagnostics toggle from the primary flow.
+- The complete screen uses one vertically scrolling list so export and transfer actions remain reachable on small displays.
+
+### Fixed
+- `.mrpro` import no longer keeps extracted ebook copies in `cacheDir`.
+- Embedded ebook entries are hashed while streaming and retained only as references to the original backup entry.
+- Full Readest export reopens the original `.mrpro` and streams the requested ebook directly to the chosen SAF destination.
+- Temporary Moon+ database files are deleted after every import, including errors and cancellation, and stale `mrpro-*` cache directories are cleaned before a new import.
+- Added fallback book recovery from `.po` and `.an` data when a database schema cannot be read.
+- Database parsing now detects compatible book tables by columns instead of requiring one exact table shape.
+- Corrected KOReader `partialMD5` sampling offsets to 512, 2048, 8192, 32768, ... through 2147483648 bytes.
+- Added native BookLore KOReader-sync endpoint handling at `/api/koreader` using standard KOReader auth headers.
+- CWA continues to use its `/kosync` endpoint while generic KOSync uses the configured base URL directly.
+
+### Tests
+- Updated the partialMD5 regression test to the KOReader-compatible sampling offsets.
+- Added BookLore URL normalization and endpoint-root tests.
+- Existing privacy, unit, lint, manifest and permission checks remain mandatory before APK delivery.
+
+### Product behavior
+- Readest transfer covers Moon+ markings through `.mrexpt`; book files can optionally be exported alongside them.
+- KOSync, CWA and BookLore transfer reading progress only and never upload ebook files.
+- A matching local or backup-contained ebook is used only to derive the KOReader-compatible document hash.
+
 ## 1.0.2 - 2026-09-12
 
 ### Fixed
