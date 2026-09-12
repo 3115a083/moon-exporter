@@ -2,6 +2,26 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.4 - 2026-09-12
+
+### Changed
+- Destination configuration is always visible before any backup is imported, so server credentials can be entered while analysis is still running.
+- The book-review section is always present and shows a clear empty/loading state before results arrive.
+- Every analyzed book is rendered as its own selectable card after import.
+- Book cards now show cover or file-type placeholder, title, author, reading progress, position calculation method, highlight count, document identity and Moon+ source entry.
+- Target and Readest export-type choices are radio selections instead of button-like selectors.
+- The book filter remains a dropdown as requested.
+- Selection controls explicitly support selecting or deselecting all currently visible books.
+
+### Fixed
+- The analyzed book list is no longer visually hidden behind destination/export controls.
+- EPUB cover/title/author/ISBN metadata can be enriched directly from the original `.mrpro` in a second streaming pass without retaining extracted ebook copies in cache.
+- Initial book results are published before cover enrichment, so the list can appear before the metadata pass completes.
+
+### Product behavior
+- The primary screen now stays usable during analysis: backup status, destination settings and credentials are independent from the book-analysis state.
+- Readest export and server transfer actions remain disabled until analyzed books are selected.
+
 ## 1.0.3 - 2026-09-12
 
 ### Changed
