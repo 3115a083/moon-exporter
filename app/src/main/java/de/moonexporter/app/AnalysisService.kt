@@ -54,17 +54,19 @@ class AnalysisService : Service() {
 
     private suspend fun analyze(uri: Uri) {
         try {
-            val totalEntries = MoonImporter.countMrproEntries(this, uri).coerceAtLeast(1)
-            val books = MoonImporter.scanMrpro(
-                context = this,
-                uri = uri,
-                onProgress = { message -> update(5, message) },
-                onEntryProgress = { done ->
-                    val percent = (5 + (done.toDouble() / totalEntries.toDouble() * 65.0)).toInt().coerceIn(5, 70)
-                    update(percent, tr("Backup wird analysiert: $done/$totalEntries", "Analyzing backup: $done/$totalEntries"))
-                },
-            )
-            val reconstructed = MoonImporter.reconstructTitles(books)
+            val totalEntries = BackupRecovery.countEntries(this, uri).coerceAtLeast(1)
+            var scanDone = 0
+            val baseBooks = MoonImporter.scanMrpro(this, uri) { message ->
+                Regex("(\\d+)").find(message)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { scanDone = it }
+                val percent = (5 + (scanDone.toDouble() / totalEntries.toDouble() * 38.0)).toInt().coerceIn(5, 43)
+                update(percent, message)
+            }
+            update(45, tr("Lesefortschritt und Titel werden rekonstruiert…", "Recovering reading progress and titles…"))
+            val recovered = BackupRecovery.recover(this, uri, baseBooks) { done, total, message ->
+                val percent = if (total <= 0) 70 else (45 + (done.toDouble() / total.toDouble() * 25.0)).toInt().coerceIn(45, 70)
+                update(percent, message)
+            }
+            val reconstructed = BackupRecovery.reconstructTitles(recovered)
             AnalysisStore.publishBooks(
                 reconstructed,
                 72,
@@ -75,7 +77,7 @@ class AnalysisService : Service() {
                 val percent = if (total <= 0) 95 else (72 + (done.toDouble() / total.toDouble() * 26.0)).toInt().coerceIn(72, 98)
                 update(percent, message)
             }
-            val finalBooks = MoonImporter.reconstructTitles(enriched)
+            val finalBooks = BackupRecovery.reconstructTitles(enriched)
             val withProgress = finalBooks.count { it.position?.percent != null }
             val doneText = tr(
                 "${finalBooks.size} Bücher analysiert, $withProgress mit Lesefortschritt.",
