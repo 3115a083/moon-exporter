@@ -9,10 +9,12 @@ Moon Exporter is an Android migration tool for historical Moon+ Reader data. It 
 Primary user flow:
 1. Select one Moon+ Reader backup file, especially `.mrpro`.
 2. Reliably discover books, reading progress, annotations and notes.
-3. Keep uncertain book/position mappings visible instead of guessing.
-4. Send the result through one supported output path:
-   - Readest-compatible file/folder export through SAF.
-   - Direct reading-progress transfer to CWA or BookLore through a KOReader/KOSync-compatible API.
+3. Select the books to transfer.
+4. Choose exactly one destination:
+   - Readest-compatible file/folder export through SAF for Moon+ annotations, optionally with book files.
+   - Generic KOSync-compatible server for reading progress.
+   - Calibre-Web Automated through its `/kosync` endpoint for reading progress.
+   - BookLore through its `/api/koreader` endpoint for reading progress.
 
 WebDAV/online backup import is deliberately deferred. It must not compete with stability work on the local backup-file workflow.
 
@@ -28,8 +30,9 @@ WebDAV/online backup import is deliberately deferred. It must not compete with s
 Repository: `3115a083/moon-exporter`
 Default branch: `main`
 Application ID / namespace: `de.moonexporter.app`
-Current revision branch: `revision/1.0.2-stability`
-Revision version: `1.0.2` / versionCode 4
+Current revision branch: `revision/1.0.3-cache-ui-import`
+Revision version: `1.0.3` / versionCode 5
+Pull request: #12, open and not merged
 Minimum Android SDK: 26
 Target Android SDK: 35
 UI: Jetpack Compose
@@ -39,33 +42,70 @@ Implemented areas:
 - Moon+ folder scanning for position and annotation data.
 - `.mrpro` ZIP/container processing.
 - SQLite metadata extraction from Moon+ backup databases.
-- EPUB metadata and cover extraction.
+- `.po` / `.an` fallback extraction from `.mrpro`.
 - KOReader-compatible partial MD5 calculation.
-- Book list, filtering, selection and fast scrolling.
+- One vertically scrolling migration UI.
+- Book selection and dropdown filtering.
 - Readest marking export.
-- Standard KOSync and CWA progress transfer.
-- Cancellation checks in several coroutine paths.
+- Generic KOSync, CWA and BookLore progress transfer.
+- Cancellation checks in long coroutine paths.
 
-## Revision 1.0.2 fixes
+## Revision 1.0.3
 
-- Root UI consumes `WindowInsets.safeDrawing`, preventing important content from being placed below system bars and display cutouts.
-- Export and server/KOSync controls are no longer conditional on a non-empty book list. They remain visible after a failed or empty import.
-- Export/send actions are disabled until at least one book is selected.
-- Backup-file import is the primary visible import action; folder import remains secondary.
-- Numbered `.tag` entries support both one-based and zero-based `_names.list` candidates.
-- Numbered `.tag` entries are additionally inspected for the SQLite header `SQLite format 3`, so `mrbooks.db` can be recovered independently of filename mapping.
-- `.mrpro` processing enforces the global archive entry count limit.
-- Empty/failed imports now distinguish between no database/positions, recognized-but-unreadable database and recognized database with no readable books.
-- Synthetic regression tests cover tag mapping and SQLite signature detection.
+### UI
+- Main interaction flow is now `backup -> select books -> choose destination -> transfer`.
+- The complete screen uses one `LazyColumn`, so transfer/export actions remain reachable on small screens.
+- Book filtering uses one dropdown instead of multiple chips.
+- Readest, generic KOSync, CWA and BookLore are destination choices in one target selector instead of duplicated export/sync sections.
+- Readest shows only file-export controls.
+- Server targets show only server URL, username, password, connection test and progress-send controls.
+- The technical device-id field and regular diagnostics toggle are removed from the primary user flow.
+
+### Import and cache
+- `.mrpro` import no longer persists extracted ebook copies in `cacheDir`.
+- Embedded book entries are streamed during analysis. The app retains only metadata, size, `partialMD5`, backup URI and archive-entry name.
+- Full Readest export reopens the original `.mrpro` and streams only the requested book entry directly to the SAF destination.
+- The temporary Moon+ SQLite database is deleted in `finally`, including failure and cancellation paths.
+- Stale `mrpro-*` cache directories are removed before a new `.mrpro` import.
+- `.po` and `.an` data can recover books when the database is unavailable or incompatible.
+- Database parsing detects compatible book tables and common column variants rather than depending on one exact schema.
+- Non-empty original Moon+ annotation text is considered exportable even if annotation counting cannot parse it.
+
+### KOSync, CWA and BookLore
+- Corrected KOReader partial-MD5 sampling offsets: 512, 2048, 8192, 32768, ... through 2147483648 bytes.
+- Generic KOSync uses the configured base URL and standard KOReader auth headers.
+- CWA uses `<base>/kosync` with its Basic-auth integration.
+- BookLore uses `<base>/api/koreader` and standard KOReader auth headers.
+- None of these server outputs upload ebook files.
+
+## Build status 1.0.3
+
+Head commit: `6587ff7c5ebb6fdd345b4bf03fd9c5ee204bf609`.
+
+GitHub Actions Android run `34701162320` completed successfully:
+1. privacy source scan
+2. unit tests
+3. Android lint
+4. debug APK build
+5. manifest/permission audit
+6. APK artifact upload
+
+CodeQL run `34701162292` also completed successfully.
+
+Artifact:
+- `MoonExporter-1.0.3-debug`
+- artifact ID `10300043458`
+- APK SHA256 `70ff93142af798c2f6730556ba9f64f91b87243e7d3c164419f0752f2dbef725`
 
 ## Core requirements still missing or incomplete
 
-- Manual per-book EPUB/PDF assignment through SAF when a book file is missing or ambiguous.
+- Validate 1.0.3 with the user's real backup and verify that the previously missing books now appear.
+- Improve manual per-book EPUB/PDF assignment through SAF when automatic matching is missing or ambiguous. Current UI supports selecting multiple files for automatic matching.
 - Explicit position quality classification: `EXACT`, `FALLBACK`, `UNRESOLVED`.
 - Exact EPUB CFI only when the actual EPUB is available and the position can be resolved structurally.
-- Reliable Readest output as a clear file/folder structure containing the supported annotations/progress/report data.
-- Reliable CWA and BookLore progress transfer over KOSync with target-specific authentication and useful HTTP errors.
-- Visible import/export/sync progress with real cancellation across all long operations.
+- Verify Readest output against real Readest behavior and add a migration report for converted/fallback/unresolved data.
+- Validate KOSync, CWA and BookLore against real servers and additional failure cases.
+- Optimize large `.mrpro` import speed without reintroducing persistent ebook caching.
 - Complete German/English localization and responsive layout verification.
 - Full final release audit and signed APK verification, beyond debug CI.
 
@@ -76,32 +116,33 @@ Moon+ position raw values must be preserved. EPUB and PDF variants must be parse
 Annotation path:
 `.an` -> zlib decompress -> Moon+ textual annotation format -> `.mrexpt` -> Readest Moon+ import.
 
-Book identity must never be guessed when evidence is weak. Use `assignment required`/equivalent state instead.
+Book identity must never be guessed when evidence is weak. Use assignment-required/equivalent state instead.
 
 For `.mrpro`:
 - `_names.list` may help map numbered `.tag` entries but must not be the sole database detector.
 - SQLite signature detection using `SQLite format 3` is required as a fallback.
-- Missing/unexpected schemas must be diagnosed instead of silently returning an empty result.
+- Missing/unexpected schemas must be diagnosed or fall back to recoverable `.po`/`.an` data instead of silently returning an empty result.
 - Keep archive entry, file size, total work and traversal protections.
+- Do not retain a full second copy of the user's library in app cache.
 
 ## Output rules
 
 ### Readest
-- Export through SAF as one clear user-selected destination, either a compatible file or a structured export folder as required by the selected export mode.
+- Export through SAF as one clear user-selected destination.
 - Preserve annotations/notes without silent loss.
-- Preserve original progress information and clearly distinguish exact, percentage fallback and unresolved positions.
-- Include a migration report describing success, fallback and unresolved items.
+- Optional full export may include source book files by streaming them from the original backup or selected SAF URI.
+- Preserve original progress information and clearly distinguish exact, percentage fallback and unresolved positions once position classification is implemented.
 
-### CWA / BookLore via KOSync
+### KOSync / CWA / BookLore
 - Match an already existing target book using KOReader-compatible document identity such as `partialMD5`.
 - Transfer reading progress only.
 - Never upload the source ebook.
 - Normalize target URLs and authentication per supported server type.
-- Treat per-book failures separately and report them clearly without exposing credentials.
+- Treat failures clearly without exposing credentials.
 
 ## Deferred functionality
 
-WebDAV/online-backup import, custom HTTP headers and the broader WebDAV security/UI surface remain valid future requirements but are lower priority than stable local backup import and stable Readest/CWA/BookLore output.
+WebDAV/online-backup import, custom HTTP headers and the broader WebDAV security/UI surface remain valid future requirements but are lower priority than stable local backup import and stable Readest/KOSync/CWA/BookLore output.
 
 ## Security and privacy invariants
 
@@ -124,17 +165,18 @@ Every test revision should pass at least:
 3. `:app:assembleDebug`
 4. Manifest/permission audit
 5. Repository privacy scan
+6. CodeQL where configured
 
 Before a final release APK additionally perform release build/signing, `apksigner verify`, exported-components/dependency/secret/PII/network/archive/XML/SAF audits.
 
 ## Engineering backlog
 
-Priority order after 1.0.2:
-1. Validate 1.0.2 against synthetic `.mrpro` containers and user test feedback.
-2. Verify and stabilize Readest export.
-3. Stabilize CWA/BookLore KOSync output, including `partialMD5`, URL/auth handling and failure cases.
+Priority order after 1.0.3:
+1. Validate import against user feedback and fix any remaining real `.mrpro` compatibility gaps.
+2. Verify and stabilize Readest output, including annotation reporting and position quality.
+3. Validate KOSync/CWA/BookLore against real targets and improve per-book error reporting.
 4. Complete manual book assignment and position-quality handling.
-5. Improve UI/performance/localization and long-operation cancellation.
+5. Improve import performance, localization, responsive UI and cancellation details.
 6. Implement WebDAV only after the above paths are stable.
 
 ## Handoff rule
