@@ -23,7 +23,7 @@ jobs:
           gradle-version: '8.11.1'
       - name: Privacy source scan
         run: |
-          ! grep -RniE '3115a083/MoonDav|de\.moondav|MoonDav' app README.md SECURITY.md
+          ! grep -RniE '3115a083/MoonDav|de\.moondav|MoonDav' app README.md SECURITY.md docs CHANGELOG.md
       - name: Unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Android lint
@@ -33,11 +33,13 @@ jobs:
       - name: Manifest and permission audit
         run: |
           grep -q 'android.permission.INTERNET' app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.FOREGROUND_SERVICE' app/src/main/AndroidManifest.xml
+          grep -q 'android:foregroundServiceType="dataSync"' app/src/main/AndroidManifest.xml
           grep -q 'android:allowBackup="false"' app/src/main/AndroidManifest.xml
           grep -q 'android:usesCleartextTraffic="false"' app/src/main/AndroidManifest.xml
           ! grep -RniE 'READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE' app/src/main/AndroidManifest.xml
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MoonExporter-1.0.0-debug
+          name: MoonExporter-1.0.5-debug
           path: app/build/outputs/apk/debug/*.apk
