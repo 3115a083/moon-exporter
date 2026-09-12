@@ -2,6 +2,29 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.5 - 2026-09-12
+
+### Changed
+- The primary flow is ordered as Backup -> Books -> Destination.
+- Backup analysis runs in a foreground data-sync service and continues when the activity is closed.
+- A determinate notification progress bar and cancel action show the running analysis outside the app.
+- Android 13+ notification permission is requested when starting a backup analysis.
+- Each book with a recovered percentage shows both the numeric percentage and a visual progress bar.
+- A book with recovered progress but without a reliable target document ID offers per-book manual ebook/PDF selection through SAF.
+- Long numeric/hash-like source names are treated as opaque identities and title reconstruction is attempted from annotation hints and EPUB metadata.
+
+### Fixed
+- Light system bars now explicitly use dark status/navigation icons so notification/status symbols remain readable.
+- Added an independent direct `.po`/`.an` recovery pass so reading progress is not lost when Moon+ database or `_names.list` mapping differs from the expected schema.
+- Annotation payloads are used as another source for reconstructed titles.
+- EPUB metadata enrichment no longer nests a closing ZIP stream around the live backup stream. Individual EPUB payloads are bounded in memory for metadata/cover inspection and are not persisted in app cache.
+- Cover extraction includes a fallback for conventional cover image filenames when OPF cover metadata is incomplete.
+
+### Security and storage
+- Background analysis uses `foregroundServiceType="dataSync"` with the required foreground-service permissions.
+- No ebook is retained as a durable cache copy. The original `.mrpro` remains the source.
+- KOSync/CWA/BookLore continue to receive progress/document identity only, never ebook file contents.
+
 ## 1.0.4 - 2026-09-12
 
 ### Changed
