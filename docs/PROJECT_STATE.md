@@ -4,18 +4,24 @@ Updated: 2026-09-12
 
 ## Product scope
 
-Moon Exporter is an Android migration tool for moving historical Moon+ Reader data primarily to Readest. It is not an ebook reader and not a general-purpose sync server.
+Moon Exporter is an Android migration tool for historical Moon+ Reader data. It is not an ebook reader and not a general-purpose sync server.
 
-Original product priority:
-- P0: local Moon+ migration from `.po`/`.an`, book identity, manual book assignment, `.mrexpt`, reading progress, export progress/cancellation, privacy.
-- P1: WebDAV online backup, custom headers, cover/index matching, `.mrpro` recovery.
-- P2: KOSync/CWA/BookLore adapters and advanced matching.
+The primary user flow is now explicitly:
+1. Select one Moon+ Reader backup file, especially `.mrpro`.
+2. Reliably discover books, reading progress, annotations and notes.
+3. Keep uncertain book/position mappings visible instead of guessing.
+4. Send the result through one supported output path:
+   - Readest-compatible file/folder export through SAF.
+   - Direct reading-progress transfer to CWA or BookLore through a KOReader/KOSync-compatible API.
 
-Readest is the primary V1 target. KOSync/CWA is optional and must not displace the core Readest migration path.
+WebDAV/online backup import is deliberately deferred. It must not compete with stability work on the local backup-file workflow.
 
-Hard scope boundary:
-- KOSync/CWA may receive authentication, document identifiers and reading-progress data only.
-- Moon Exporter must never upload ebook files through the KOSync/CWA flow.
+## Hard scope boundaries
+
+- KOSync/CWA/BookLore may receive authentication data, document identifiers and reading-progress data only.
+- Moon Exporter must never upload ebook files through the KOSync/CWA/BookLore flow.
+- KOReader-compatible `partialMD5` is an identifier for matching a book that already exists on the target server.
+- Exact EPUB CFI must never be invented. Use `FALLBACK` or `UNRESOLVED` when exact structural mapping is not justified.
 
 ## Current code baseline
 
@@ -52,18 +58,16 @@ Confirmed issues:
 
 Keep the current visual color direction while repairing these regressions.
 
-## Original requirements still missing or incomplete
+## Core requirements still missing or incomplete
 
+- Robust `.mrpro` backup-file import across format variants without relying on a single filename mapping mechanism.
 - Manual per-book EPUB/PDF assignment through SAF when a book file is missing or ambiguous.
 - Explicit position quality classification: `EXACT`, `FALLBACK`, `UNRESOLVED`.
-- Exact EPUB CFI only when the actual EPUB is available and the position can be resolved structurally. Never invent a CFI.
-- WebDAV online backup with server URL, username, password and custom HTTP headers.
-- WebDAV security: HTTPS-first, redirect controls, no URL credentials, timeout/retry/size limits, CR/LF header validation, LAN/private-host opt-in, safe PROPFIND XML parsing.
-- Secure credential storage using Android Keystore/encrypted local storage.
-- Complete System/Light/Dark/Dynamic Color theme support.
-- Complete German/English localization without mixed-language views.
-- Responsive layout at 360 dp minimum width with proper system-bar/cutout handling.
-- Migration/export report with found/converted/not-converted/warnings plus visible progress and real cancellation.
+- Exact EPUB CFI only when the actual EPUB is available and the position can be resolved structurally.
+- Reliable Readest output as a clear file/folder structure containing the supported annotations/progress/report data.
+- Reliable CWA and BookLore progress transfer over KOSync with target-specific authentication and useful HTTP errors.
+- Visible import/export/sync progress with real cancellation.
+- Complete German/English localization and responsive layout with correct system insets.
 - Full final release audit and signed APK verification, beyond debug CI.
 
 ## Import rules
@@ -80,6 +84,26 @@ For `.mrpro`:
 - Add SQLite signature detection using `SQLite format 3`.
 - Diagnose missing/unexpected schemas instead of silently returning an empty result.
 - Keep archive entry, file size, total work and traversal protections.
+- Prefer an inexpensive backup inventory before expensive EPUB/hash processing.
+
+## Output rules
+
+### Readest
+- Export through SAF as one clear user-selected destination, either a compatible file or a structured export folder as required by the selected export mode.
+- Preserve annotations/notes without silent loss.
+- Preserve original progress information and clearly distinguish exact, percentage fallback and unresolved positions.
+- Include a migration report describing success, fallback and unresolved items.
+
+### CWA / BookLore via KOSync
+- Match an already existing target book using KOReader-compatible document identity such as `partialMD5`.
+- Transfer reading progress only.
+- Never upload the source ebook.
+- Normalize target URLs and authentication per supported server type.
+- Treat per-book failures separately and report them clearly without exposing credentials.
+
+## Deferred functionality
+
+WebDAV/online-backup import, custom HTTP headers and the broader WebDAV security/UI surface remain valid future requirements but are lower priority than stable local backup import and stable Readest/CWA/BookLore output.
 
 ## Security and privacy invariants
 
@@ -117,10 +141,11 @@ Before a final release APK additionally perform:
 Priority order:
 1. Fix system-inset and hidden-controls regressions.
 2. Repair `.mrpro` detection and add synthetic SQLite-`.tag` regression tests.
-3. Complete original P0 local migration requirements, especially manual book assignment and position quality states.
-4. Verify Readest `.mrexpt` and progress migration behavior.
-5. Implement secure WebDAV P1 flow.
-6. Continue KOSync/CWA P2 hardening only after the Readest core is stable.
+3. Verify and stabilize Readest export.
+4. Stabilize CWA/BookLore KOSync output, including `partialMD5`, URL/auth handling and failure cases.
+5. Complete manual book assignment and position-quality handling.
+6. Improve UI/performance/localization and long-operation cancellation.
+7. Implement WebDAV only after the above paths are stable.
 
 ## Handoff rule
 
