@@ -20,6 +20,12 @@ class UtilityTest {
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1", ServerType.CALIBRE_WEB_AUTOMATED))
     }
 
+    @Test fun `normalizes BookLore base without duplicate koreader path`() {
+        assertEquals("https://books.example.test", KoSyncClient.normalizeBaseUrl("https://books.example.test/api/koreader/", ServerType.BOOKLORE))
+        val config = SyncConfig(ServerType.BOOKLORE, "https://books.example.test", "user", "secret")
+        assertEquals("https://books.example.test/api/koreader", KoSyncClient.endpointRoot(config))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `rejects cleartext server url`() {
         KoSyncClient.normalizeBaseUrl("http://192.0.2.1", ServerType.STANDARD_KOSYNC)
@@ -30,8 +36,8 @@ class UtilityTest {
         val hash = partialMd5(ByteArrayInputStream(bytes))
         assertEquals(32, hash.length)
         assertTrue(hash.matches(Regex("[0-9a-f]{32}")))
-        assertEquals(0L, PARTIAL_MD5_OFFSETS.first())
-        assertEquals(1L shl 30, PARTIAL_MD5_OFFSETS.last())
+        assertEquals(1L shl 9, PARTIAL_MD5_OFFSETS.first())
+        assertEquals(1L shl 31, PARTIAL_MD5_OFFSETS.last())
     }
 
     @Test fun `article sorting ignores common prefixes`() {
