@@ -1,8 +1,11 @@
 package de.moonexporter.app
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -42,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -52,11 +56,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -65,6 +73,10 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
         setContent { MoonExporterApp(this) }
     }
 }
@@ -73,18 +85,23 @@ private enum class TransferTarget { READEST, KOSYNC, CWA, BOOKLORE }
 
 @Composable
 private fun MoonExporterApp(context: Context) {
+    val analysis by AnalysisState.state.collectAsStateWithLifecycle()
     var books by remember { mutableStateOf<List<BookItem>>(emptyList()) }
     val selected = remember { mutableStateMapOf<String, Boolean>() }
     var filter by remember { mutableStateOf(BookFilter.ALL) }
     var target by remember { mutableStateOf(TransferTarget.READEST) }
     var exportMode by remember { mutableStateOf(ExportMode.MARKINGS_ONLY) }
     var status by remember { mutableStateOf(tr("Wähle eine Moon+ Backup-Datei.", "Choose a Moon+ backup file.")) }
-    var busy by remember { mutableStateOf(false) }
+    var localBusy by remember { mutableStateOf(false) }
     var activeJob by remember { mutableStateOf<Job?>(null) }
     var serverUrl by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var pendingBookKey by remember { mutableStateOf<String?>(null) }
+    var lastSession by remember { mutableStateOf(0L) }
+    var lastRevision by remember { mutableStateOf(-1) }
     val scope = rememberCoroutineScope()
+    val busy = localBusy || analysis.running
 
     fun setBooks(newBooks: List<BookItem>, resetSelection: Boolean = true) {
         books = newBooks.sortedBy { sortTitle(it.title) }
@@ -94,28 +111,45 @@ private fun MoonExporterApp(context: Context) {
         } else books.forEach { if (it.key !in selected) selected[it.key] = true }
     }
 
+    LaunchedEffect(analysis.sessionId, analysis.revision) {
+        if (analysis.sessionId != 0L && analysis.revision != lastRevision) {
+            val newSession = analysis.sessionId != lastSession
+            setBooks(analysis.books, resetSelection = newSession)
+            status = analysis.status
+            lastSession = analysis.sessionId
+            lastRevision = analysis.revision
+        }
+    }
+    LaunchedEffect(analysis.status) {
+        if (analysis.sessionId != 0L) status = analysis.status
+    }
+
     fun launchWork(cancelled: String, block: suspend () -> Unit) {
         activeJob = scope.launch {
-            busy = true
+            localBusy = true
             try { block() }
             catch (_: CancellationException) { status = cancelled; throw CancellationException() }
             catch (t: Throwable) { status = t.message ?: tr("Vorgang fehlgeschlagen", "Operation failed") }
-            finally { busy = false; activeJob = null }
+            finally { localBusy = false; activeJob = null }
         }
     }
+
+    fun startAnalysis(uri: android.net.Uri) {
+        val intent = Intent(context, AnalysisService::class.java)
+            .setAction(AnalysisService.ACTION_START)
+            .putExtra(AnalysisService.EXTRA_URI, uri.toString())
+        ContextCompat.startForegroundService(context, intent)
+    }
+
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        launchWork(tr("Import abgebrochen", "Import cancelled")) {
-            status = tr("Backup wird analysiert…", "Analyzing backup…")
-            val result = MoonImporter.scanMrpro(context, uri) { status = it }
-            setBooks(result)
-            status = tr("${result.size} Bücher gefunden. Cover und Metadaten werden ergänzt…", "${result.size} books found. Loading covers and metadata…")
-            val enriched = BackupMetadata.enrich(context, result) { status = it }
-            setBooks(enriched, resetSelection = false)
-            status = tr("${enriched.size} Bücher analysiert.", "${enriched.size} books analyzed.")
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        startAnalysis(uri)
     }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -124,22 +158,45 @@ private fun MoonExporterApp(context: Context) {
         launchWork(tr("Import abgebrochen", "Import cancelled")) {
             status = tr("Moon+ Ordner wird analysiert…", "Analyzing Moon+ folder…")
             val result = MoonImporter.scanFolder(context, uri) { status = it }
-            setBooks(result)
+            setBooks(ProgressRecovery.reconstructTitles(result))
             status = tr("${result.size} Bücher analysiert.", "${result.size} books analyzed.")
         }
     }
 
-    val epubPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+    val multiBookPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         uris.forEach { runCatching { context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
         launchWork(tr("Zuordnung abgebrochen", "Matching cancelled")) {
             val matches = mutableListOf<EpubMatch>()
             uris.forEachIndexed { index, uri ->
                 status = tr("Buchdatei ${index + 1}/${uris.size} wird geprüft…", "Checking book file ${index + 1}/${uris.size}…")
-                MoonImporter.inspectSelectedEpub(context, uri)?.let(matches::add)
+                BookFileInspector.inspect(context, uri)?.let(matches::add)
             }
-            setBooks(MoonImporter.autoMatch(books, matches), resetSelection = false)
+            setBooks(ProgressRecovery.reconstructTitles(MoonImporter.autoMatch(books, matches)), resetSelection = false)
             status = tr("${matches.size} Buchdateien geprüft.", "${matches.size} book files checked.")
+        }
+    }
+
+    val singleBookPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val key = pendingBookKey
+        pendingBookKey = null
+        if (uri == null || key == null) return@rememberLauncherForActivityResult
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        launchWork(tr("Zuordnung abgebrochen", "Matching cancelled")) {
+            status = tr("Buchdatei wird geprüft…", "Checking book file…")
+            val match = BookFileInspector.inspect(context, uri) ?: error(tr("Buchdatei konnte nicht gelesen werden", "Book file could not be read"))
+            books = books.map { book ->
+                if (book.key != key) book else {
+                    val metadataTitle = match.title?.takeIf { it.isNotBlank() && !ProgressRecovery.looksOpaque(it) }
+                    book.copy(
+                        epub = match,
+                        title = metadataTitle ?: book.title,
+                        author = book.author ?: match.author,
+                        isbn = book.isbn ?: match.isbn,
+                    )
+                }
+            }.sortedBy { sortTitle(it.title) }
+            status = tr("Buchdatei zugeordnet. Der Moon+-Lesefortschritt bleibt erhalten.", "Book file matched. Moon+ reading progress was preserved.")
         }
     }
 
@@ -164,7 +221,7 @@ private fun MoonExporterApp(context: Context) {
     val selectedCount = selected.count { it.value }
     val selectedWithProgress = books.count { selected[it.key] == true && it.position?.percent != null }
     val selectedWithMarks = books.count { selected[it.key] == true && it.hasAnnotations }
-    val missingBookFiles = books.count { selected[it.key] == true && it.epub?.partialMd5.isNullOrBlank() }
+    val missingBookFiles = books.count { selected[it.key] == true && it.position != null && it.epub?.partialMd5.isNullOrBlank() }
 
     MaterialTheme(colorScheme = lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
@@ -179,22 +236,66 @@ private fun MoonExporterApp(context: Context) {
                             Text("Moon Exporter", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                             Text(tr("Moon+ Lesefortschritt und Markierungen übertragen", "Transfer Moon+ reading progress and highlights"), style = MaterialTheme.typography.bodySmall)
                         }
-                        if (busy) TextButton(onClick = { activeJob?.cancel() }) { Text(tr("Abbrechen", "Cancel")) }
+                        if (busy) TextButton(onClick = {
+                            if (analysis.running) {
+                                context.startService(Intent(context, AnalysisService::class.java).setAction(AnalysisService.ACTION_CANCEL))
+                            } else activeJob?.cancel()
+                        }) { Text(tr("Abbrechen", "Cancel")) }
                     }
                 }
 
                 item {
-                    StepCard("1", tr("Backup", "Backup")) {
-                        Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(tr("Moon+ Backup-Datei auswählen", "Choose Moon+ backup file")) }
+                    StepCard("1", tr("Backup analysieren", "Analyze backup")) {
+                        Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                            Text(tr("Moon+ Backup-Datei auswählen", "Choose Moon+ backup file"))
+                        }
                         TextButton(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Alternativ Moon+ Ordner verwenden", "Use Moon+ folder instead")) }
-                        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        if (analysis.running || localBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                         Text(status, style = MaterialTheme.typography.bodySmall)
+                        if (analysis.running) Text(tr("Die Analyse läuft als Android-Hintergrundaufgabe weiter. Der Fortschritt ist auch in der Benachrichtigung sichtbar.", "Analysis continues as an Android foreground task. Progress is also visible in the notification."), style = MaterialTheme.typography.labelSmall)
                     }
                 }
 
                 item {
-                    StepCard("2", tr("Ziel konfigurieren", "Configure destination")) {
-                        Text(tr("Ziel auswählen", "Select destination"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    StepCard("2", tr("Bücher prüfen und auswählen", "Review and select books")) {
+                        if (books.isEmpty()) {
+                            Text(
+                                if (analysis.running) tr("Die Buchliste erscheint nach der Datenauswertung. Du kannst bereits zu Schritt 3 scrollen und das Ziel konfigurieren.", "The book list appears after data extraction. You can already scroll to step 3 and configure the destination.")
+                                else tr("Noch keine Bücher analysiert. Nach dem Import werden hier alle erkannten Bücher mit Fortschritt und Berechnungsart angezeigt.", "No books analyzed yet. Detected books will appear here with progress and calculation method."),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else {
+                            Text(tr("$selectedCount von ${books.size} ausgewählt · $selectedWithProgress mit Fortschritt · $selectedWithMarks mit Markierungen", "$selectedCount of ${books.size} selected · $selectedWithProgress with progress · $selectedWithMarks with highlights"), style = MaterialTheme.typography.bodySmall)
+                            FilterDropdown(filter) { filter = it }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = true } }, modifier = Modifier.weight(1f)) { Text(tr("Sichtbare wählen", "Select visible")) }
+                                OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = false } }, modifier = Modifier.weight(1f)) { Text(tr("Abwählen", "Deselect")) }
+                            }
+                            if (missingBookFiles > 0) {
+                                Text(tr("$missingBookFiles ausgewählte Bücher haben Fortschritt, aber noch keine sichere Buchdatei für die Zielberechnung. Sie können direkt in der jeweiligen Buchkarte zugeordnet werden.", "$missingBookFiles selected books have progress but no reliable book file for target calculation. They can be matched directly in each book card."), style = MaterialTheme.typography.bodySmall)
+                                OutlinedButton(onClick = { multiBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }, enabled = !busy) {
+                                    Text(tr("Mehrere Buchdateien automatisch zuordnen", "Auto-match multiple book files"))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (books.isNotEmpty()) items(visibleBooks, key = { it.key }) { book ->
+                    BookCard(
+                        book = book,
+                        checked = selected[book.key] == true,
+                        onChecked = { selected[book.key] = it },
+                        onChooseBook = {
+                            pendingBookKey = book.key
+                            singleBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
+                        },
+                    )
+                }
+
+                item {
+                    StepCard("3", tr("Ziel auswählen", "Choose destination")) {
+                        Text(tr("Exportziel", "Export destination"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                         TransferTarget.entries.forEach { option -> SelectionRow(target == option, targetLabel(option)) { target = option } }
                         when (target) {
                             TransferTarget.READEST -> ReadestTarget(exportMode, { exportMode = it }, enabled = !busy && selectedCount > 0) { exportPicker.launch(null) }
@@ -215,33 +316,6 @@ private fun MoonExporterApp(context: Context) {
                             )
                         }
                     }
-                }
-
-                item {
-                    StepCard("3", tr("Bücher prüfen und auswählen", "Review and select books")) {
-                        if (books.isEmpty()) {
-                            Text(
-                                if (busy) tr("Die Buchliste erscheint hier automatisch, sobald die Analyse Ergebnisse liefert. Die Zielkonfiguration oben bleibt währenddessen nutzbar.", "The book list appears here automatically as soon as analysis produces results. Destination configuration above remains usable meanwhile.")
-                                else tr("Noch keine Bücher analysiert. Nach dem Import werden hier alle erkannten Bücher angezeigt.", "No books analyzed yet. All detected books will appear here after import."),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        } else {
-                            Text(tr("$selectedCount von ${books.size} ausgewählt · $selectedWithProgress mit Fortschritt · $selectedWithMarks mit Markierungen", "$selectedCount of ${books.size} selected · $selectedWithProgress with progress · $selectedWithMarks with highlights"), style = MaterialTheme.typography.bodySmall)
-                            FilterDropdown(filter) { filter = it }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = true } }, modifier = Modifier.weight(1f)) { Text(tr("Sichtbare wählen", "Select visible")) }
-                                OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = false } }, modifier = Modifier.weight(1f)) { Text(tr("Sichtbare abwählen", "Deselect visible")) }
-                            }
-                            if (missingBookFiles > 0) {
-                                Text(tr("$missingBookFiles ausgewählte Bücher haben keine sichere KOSync-ID.", "$missingBookFiles selected books have no reliable KOSync ID."), style = MaterialTheme.typography.bodySmall)
-                                OutlinedButton(onClick = { epubPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }, enabled = !busy) { Text(tr("Buchdateien zuordnen", "Match book files")) }
-                            }
-                        }
-                    }
-                }
-
-                if (books.isNotEmpty()) items(visibleBooks, key = { it.key }) { book ->
-                    BookCard(book, selected[book.key] == true) { selected[book.key] = it }
                 }
             }
         }
@@ -299,33 +373,43 @@ private fun ServerTarget(
         TransferTarget.BOOKLORE -> tr("BookLore-Serveradresse. /api/koreader wird automatisch ergänzt.", "BookLore server address. /api/koreader is added automatically.")
         else -> tr("Adresse des KOSync-kompatiblen Servers.", "Address of the KOSync-compatible server.")
     }
-    Text(tr("Zugangsdaten können bereits während der Backup-Analyse eingegeben werden.", "Credentials can be entered while the backup is still being analyzed."), style = MaterialTheme.typography.bodySmall)
+    Text(tr("Die Zugangsdaten können bereits eingegeben werden, während Schritt 1 noch analysiert.", "Credentials can be entered while step 1 is still analyzing."), style = MaterialTheme.typography.bodySmall)
     Text(hint, style = MaterialTheme.typography.bodySmall)
     OutlinedTextField(url, setUrl, label = { Text(tr("Server-URL (HTTPS)", "Server URL (HTTPS)")) }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
     OutlinedTextField(user, setUser, label = { Text(tr("Benutzername", "Username")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(password, setPassword, label = { Text(tr("Passwort", "Password")) }, singleLine = true, modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation())
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onTest, enabled = !busy && url.isNotBlank() && user.isNotBlank(), modifier = Modifier.weight(1f)) { Text(tr("Verbindung testen", "Test connection")) }
-        Button(onClick = onSend, enabled = !busy && canSend && url.isNotBlank() && user.isNotBlank(), modifier = Modifier.weight(1f)) { Text(tr("Fortschritt senden", "Send progress")) }
+        OutlinedButton(onClick = onTest, enabled = !localActionBlocked(busy) && url.isNotBlank() && user.isNotBlank(), modifier = Modifier.weight(1f)) { Text(tr("Verbindung testen", "Test connection")) }
+        Button(onClick = onSend, enabled = !localActionBlocked(busy) && canSend && url.isNotBlank() && user.isNotBlank(), modifier = Modifier.weight(1f)) { Text(tr("Fortschritt senden", "Send progress")) }
     }
 }
 
+private fun localActionBlocked(busy: Boolean): Boolean = busy
+
 @Composable
-private fun BookCard(book: BookItem, checked: Boolean, onChecked: (Boolean) -> Unit) {
+private fun BookCard(book: BookItem, checked: Boolean, onChecked: (Boolean) -> Unit, onChooseBook: () -> Unit) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Checkbox(checked = checked, onCheckedChange = onChecked)
             Cover(book.epub?.cover, book.extension)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(book.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 book.author?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                val progress = book.position?.percent?.let { "%.1f%%".format(Locale.ROOT, it) } ?: tr("kein Fortschritt", "no progress")
-                Text(tr("Lesefortschritt: $progress", "Reading progress: $progress"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                Text(tr("Berechnung: ${positionMethod(book.position)}", "Method: ${positionMethod(book.position)}"), style = MaterialTheme.typography.bodySmall)
+                val percent = book.position?.percent
+                val progressText = percent?.let { "%.1f%%".format(Locale.ROOT, it) } ?: tr("kein Fortschritt", "no progress")
+                Text(tr("Lesefortschritt: $progressText", "Reading progress: $progressText"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                if (percent != null) LinearProgressIndicator(progress = { (percent / 100.0).coerceIn(0.0, 1.0).toFloat() }, modifier = Modifier.fillMaxWidth())
+                Text(tr("Berechnungsart: ${positionMethod(book.position)}", "Calculation: ${positionMethod(book.position)}"), style = MaterialTheme.typography.bodySmall)
                 Text(tr("Markierungen: ${book.annotation?.count ?: 0}", "Highlights: ${book.annotation?.count ?: 0}"), style = MaterialTheme.typography.bodySmall)
-                val identity = book.epub?.partialMd5?.takeIf { it.isNotBlank() }?.let { "partialMD5 ${it.take(10)}…" } ?: tr("keine sichere KOSync-ID", "no reliable KOSync ID")
+                val identity = book.epub?.partialMd5?.takeIf { it.isNotBlank() }?.let { "partialMD5 ${it.take(10)}…" } ?: tr("noch keine sichere KOSync-ID", "no reliable KOSync ID yet")
                 Text(tr("Buch-ID: $identity", "Book ID: $identity"), style = MaterialTheme.typography.bodySmall)
-                Text(tr("Quelle: ${book.sourceFile}", "Source: ${book.sourceFile}"), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (book.position != null && book.epub?.partialMd5.isNullOrBlank()) {
+                    OutlinedButton(onClick = onChooseBook, modifier = Modifier.fillMaxWidth()) {
+                        Text(tr("Passende Buchdatei auswählen", "Choose matching book file"))
+                    }
+                    Text(tr("Der gefundene Moon+-Fortschritt bleibt erhalten. Die Buchdatei wird nur für Titel, Cover und Zielposition/ID verwendet.", "The recovered Moon+ progress is preserved. The book file is only used for title, cover and target position/ID."), style = MaterialTheme.typography.labelSmall)
+                }
+                if (book.position?.raw?.isNotBlank() == true) Text(tr("Moon+-Rohposition erhalten", "Moon+ raw position preserved"), style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -333,8 +417,15 @@ private fun BookCard(book: BookItem, checked: Boolean, onChecked: (Boolean) -> U
 
 @Composable
 private fun Cover(bitmap: Bitmap?, extension: String) {
-    if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)))
-    else Box(Modifier.size(64.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) { Text(extension.uppercase(Locale.ROOT).take(4), style = MaterialTheme.typography.labelMedium) }
+    if (bitmap != null) Image(
+        bitmap.asImageBitmap(),
+        contentDescription = tr("Buchcover", "Book cover"),
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.size(width = 56.dp, height = 82.dp).clip(RoundedCornerShape(8.dp)),
+    ) else Box(
+        Modifier.size(width = 56.dp, height = 82.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center,
+    ) { Text(extension.uppercase(Locale.ROOT).take(4).ifBlank { "BOOK" }, style = MaterialTheme.typography.labelMedium) }
 }
 
 @Composable
@@ -343,7 +434,7 @@ private fun positionMethod(position: MoonPosition?): String = when {
     position.chapterOrPage != null && position.section != null && position.offset != null -> tr("Kapitel + Abschnitt + Zeichenposition", "chapter + section + character offset")
     position.chapterOrPage != null && position.offset == null -> tr("Seite + Prozent", "page + percentage")
     position.percent != null -> tr("Prozent-Fallback", "percentage fallback")
-    else -> tr("Rohwert erhalten, nicht aufgelöst", "raw value preserved, unresolved")
+    else -> tr("Rohwert erhalten, noch nicht aufgelöst", "raw value preserved, unresolved")
 }
 
 private fun serverType(target: TransferTarget): ServerType = when (target) {
