@@ -28,6 +28,7 @@ internal object MoonImporter {
     private const val MAX_AN_BYTES = 32 * 1024 * 1024
     private const val MAX_META_BYTES = 4 * 1024 * 1024
     private const val MAX_DB_BYTES = 384L * 1024 * 1024
+    private val SQLITE_HEADER = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
 
     suspend fun scanFolder(context: Context, uri: Uri, onProgress: (String) -> Unit): List<BookItem> = withContext(Dispatchers.IO) {
         val root = DocumentFile.fromTreeUri(context, uri) ?: return@withContext emptyList()
@@ -66,6 +67,7 @@ internal object MoonImporter {
         val embedded = linkedMapOf<String, EpubMatch>()
         val xmlPositions = linkedMapOf<String, MoonPosition>()
         var entryCount = 0
+        var sqliteDetectedBySignature = false
 
         context.contentResolver.openInputStream(uri)?.use { raw ->
             ZipInputStream(raw.buffered()).use { zip ->
@@ -74,17 +76,54 @@ internal object MoonImporter {
                     val entry = zip.nextEntry ?: break
                     if (entry.isDirectory) continue
                     entryCount++
+                    if (entryCount > MAX_FILES) error(tr("Backup enthält zu viele Dateien", "Backup contains too many files"))
                     if (entryCount % 20 == 0) onProgress(tr("Backup: $entryCount Einträge", "Backup: $entryCount entries"))
                     val clean = entry.name.replace('\\', '/').trimStart('/')
                     if (clean.contains("../")) continue
-                    val logical = logicalMrproName(clean, names)
+                    val candidates = mrproLogicalCandidates(clean, names)
+                    val base = clean.substringAfterLast('/')
+                    val isNumberedTag = Regex("^\\d+\\.tag$", RegexOption.IGNORE_CASE).matches(base)
+
+                    if (isNumberedTag) {
+                        val prefix = readPrefix(zip, SQLITE_HEADER.size)
+                        when {
+                            looksLikeSqliteHeader(prefix) -> {
+                                if (!dbFile.exists()) {
+                                    copyBoundedWithPrefix(zip, dbFile, MAX_DB_BYTES, prefix)
+                                    sqliteDetectedBySignature = true
+                                    onProgress(tr("Backup-Datenbank erkannt", "Backup database detected"))
+                                }
+                            }
+                            candidates.any { it.equals("mrbooks.db", true) } -> copyBoundedWithPrefix(zip, dbFile, MAX_DB_BYTES, prefix)
+                            candidates.any { it.equals("positions10.xml", true) } -> {
+                                readBoundedWithPrefix(zip, MAX_META_BYTES, prefix)?.let { parsePositionsXml(it.toString(Charsets.UTF_8), xmlPositions) }
+                            }
+                            else -> {
+                                val logicalBook = candidates.firstOrNull { candidate ->
+                                    candidate.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("epub", "pdf", "mobi", "azw3")
+                                }
+                                if (logicalBook != null) {
+                                    val target = File(workDir, safeName(logicalBook.substringAfterLast('/')))
+                                    val md5 = copyBookAndHash(zip, target, prefix)
+                                    val inspected = if (logicalBook.endsWith(".epub", true)) inspectEpubFile(target, logicalBook, md5)
+                                    else EpubMatch(embeddedPath = target.absolutePath, fileName = logicalBook.substringAfterLast('/'), partialMd5 = md5, size = target.length())
+                                    embedded[logicalBook.lowercase(Locale.ROOT)] = inspected
+                                    embedded[logicalBook.substringAfterLast('/').lowercase(Locale.ROOT)] = inspected
+                                }
+                            }
+                        }
+                        continue
+                    }
+
+                    val logical = candidates.first()
                     when {
                         logical.equals("mrbooks.db", true) -> copyBounded(zip, dbFile, MAX_DB_BYTES)
                         logical.equals("positions10.xml", true) -> readBounded(zip, MAX_META_BYTES)?.let { parsePositionsXml(it.toString(Charsets.UTF_8), xmlPositions) }
                         logical.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("epub", "pdf", "mobi", "azw3") -> {
                             val target = File(workDir, safeName(logical.substringAfterLast('/')))
                             val md5 = copyBookAndHash(zip, target)
-                            val inspected = if (logical.endsWith(".epub", true)) inspectEpubFile(target, logical, md5) else EpubMatch(embeddedPath = target.absolutePath, fileName = logical.substringAfterLast('/'), partialMd5 = md5, size = target.length())
+                            val inspected = if (logical.endsWith(".epub", true)) inspectEpubFile(target, logical, md5)
+                            else EpubMatch(embeddedPath = target.absolutePath, fileName = logical.substringAfterLast('/'), partialMd5 = md5, size = target.length())
                             embedded[logical.lowercase(Locale.ROOT)] = inspected
                             embedded[logical.substringAfterLast('/').lowercase(Locale.ROOT)] = inspected
                         }
@@ -93,9 +132,28 @@ internal object MoonImporter {
             }
         } ?: error(tr("Backup konnte nicht geöffnet werden", "Could not open backup"))
 
-        if (!dbFile.exists()) return@withContext xmlPositions.map { (file, pos) -> folderBook(file, pos, null, null) }
-        val books = readDatabase(dbFile, embedded, xmlPositions)
-        if (books.isEmpty()) xmlPositions.map { (file, pos) -> folderBook(file, pos, null, null) } else books
+        if (!dbFile.exists()) {
+            if (xmlPositions.isNotEmpty()) return@withContext xmlPositions.map { (file, pos) -> folderBook(file, pos, null, null) }
+            error(tr(
+                "Backup analysiert ($entryCount Einträge), aber keine Moon+-Buchdatenbank oder Positionsdaten erkannt.",
+                "Backup analyzed ($entryCount entries), but no Moon+ book database or position data was detected.",
+            ))
+        }
+
+        val books = runCatching { readDatabase(dbFile, embedded, xmlPositions) }.getOrElse { cause ->
+            if (xmlPositions.isNotEmpty()) return@withContext xmlPositions.map { (file, pos) -> folderBook(file, pos, null, null) }
+            val mode = if (sqliteDetectedBySignature) tr("per SQLite-Signatur", "by SQLite signature") else tr("über Backup-Index", "through backup index")
+            error(tr(
+                "Moon+-Datenbank $mode erkannt, aber Buchdaten konnten nicht gelesen werden: ${cause.message ?: "unbekannt"}",
+                "Moon+ database detected $mode, but book data could not be read: ${cause.message ?: "unknown"}",
+            ))
+        }
+        if (books.isNotEmpty()) return@withContext books
+        if (xmlPositions.isNotEmpty()) return@withContext xmlPositions.map { (file, pos) -> folderBook(file, pos, null, null) }
+        error(tr(
+            "Backup analysiert ($entryCount Einträge, Datenbank erkannt), aber die Datenbank enthält keine lesbaren Bücher.",
+            "Backup analyzed ($entryCount entries, database detected), but the database contains no readable books.",
+        ))
     }
 
     suspend fun inspectSelectedEpub(context: Context, uri: Uri): EpubMatch? = withContext(Dispatchers.IO) {
@@ -146,15 +204,26 @@ internal object MoonImporter {
         return emptyList()
     }
 
-    private fun logicalMrproName(path: String, names: List<String>): String {
+    internal fun mrproLogicalCandidates(path: String, names: List<String>): List<String> {
         val base = path.substringAfterLast('/')
         val n = Regex("^(\\d+)\\.tag$", RegexOption.IGNORE_CASE).matchEntire(base)?.groupValues?.getOrNull(1)?.toIntOrNull()
-        return if (n != null && n > 0 && n <= names.size && names[n - 1].isNotBlank()) names[n - 1] else base
+            ?: return listOf(base)
+        val out = mutableListOf<String>()
+        if (n > 0 && n <= names.size) names[n - 1].takeIf { it.isNotBlank() }?.let(out::add)
+        if (n >= 0 && n < names.size) names[n].takeIf { it.isNotBlank() && it !in out }?.let(out::add)
+        if (base !in out) out += base
+        return out
     }
+
+    internal fun looksLikeSqliteHeader(bytes: ByteArray): Boolean =
+        bytes.size >= SQLITE_HEADER.size && SQLITE_HEADER.indices.all { bytes[it] == SQLITE_HEADER[it] }
 
     private fun readDatabase(dbFile: File, embedded: Map<String, EpubMatch>, positions: Map<String, MoonPosition>): List<BookItem> {
         val db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         db.use {
+            val hasBooks = it.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)='books' LIMIT 1", null).use { c -> c.moveToFirst() }
+            if (!hasBooks) error(tr("Tabelle 'books' fehlt", "Missing 'books' table"))
+
             val notes = linkedMapOf<String, MutableList<AnnotationRecord>>()
             runCatching {
                 it.rawQuery("SELECT * FROM notes", null).use { c ->
@@ -277,6 +346,17 @@ internal object MoonImporter {
     private fun readSmallText(context: Context, uri: Uri, max: Int): String? = readBytes(context, uri, max)?.toString(Charsets.UTF_8)
     private fun readBytes(context: Context, uri: Uri, max: Int): ByteArray? = context.contentResolver.openInputStream(uri)?.use { readBounded(it, max) }
 
+    private fun readPrefix(input: java.io.InputStream, count: Int): ByteArray {
+        val out = ByteArrayOutputStream(count)
+        val buffer = ByteArray(count)
+        while (out.size() < count) {
+            val n = input.read(buffer, 0, count - out.size())
+            if (n < 0) break
+            out.write(buffer, 0, n)
+        }
+        return out.toByteArray()
+    }
+
     private fun readBounded(input: java.io.InputStream, max: Int): ByteArray? {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(32 * 1024)
@@ -291,10 +371,20 @@ internal object MoonImporter {
         return out.toByteArray()
     }
 
-    private fun copyBounded(input: java.io.InputStream, target: File, max: Long) {
+    private fun readBoundedWithPrefix(input: java.io.InputStream, max: Int, prefix: ByteArray): ByteArray? {
+        if (prefix.size > max) return null
+        val remainder = readBounded(input, max - prefix.size) ?: return null
+        return prefix + remainder
+    }
+
+    private fun copyBounded(input: java.io.InputStream, target: File, max: Long) = copyBoundedWithPrefix(input, target, max, byteArrayOf())
+
+    private fun copyBoundedWithPrefix(input: java.io.InputStream, target: File, max: Long, prefix: ByteArray) {
         FileOutputStream(target).use { out ->
+            var total = prefix.size.toLong()
+            if (total > max) error(tr("Backup-Datenbank zu groß", "Backup database too large"))
+            out.write(prefix)
             val buf = ByteArray(64 * 1024)
-            var total = 0L
             while (true) {
                 val n = input.read(buf)
                 if (n < 0) break
@@ -305,25 +395,36 @@ internal object MoonImporter {
         }
     }
 
-    private fun copyBookAndHash(input: java.io.InputStream, target: File): String {
+    private fun copyBookAndHash(input: java.io.InputStream, target: File, prefix: ByteArray = byteArrayOf()): String {
         val digestChunks = Array(PARTIAL_MD5_OFFSETS.size) { ByteArray(1024) }
         val counts = IntArray(PARTIAL_MD5_OFFSETS.size)
         var absolute = 0L
+
+        fun consume(bytes: ByteArray, length: Int, out: FileOutputStream) {
+            out.write(bytes, 0, length)
+            for (i in PARTIAL_MD5_OFFSETS.indices) {
+                val start = PARTIAL_MD5_OFFSETS[i]
+                val end = start + 1024
+                val blockEnd = absolute + length
+                if (blockEnd <= start || absolute >= end) continue
+                val from = maxOf(absolute, start)
+                val to = minOf(blockEnd, end)
+                val src = (from - absolute).toInt()
+                val dst = (from - start).toInt()
+                val len = (to - from).toInt()
+                System.arraycopy(bytes, src, digestChunks[i], dst, len)
+                counts[i] = maxOf(counts[i], dst + len)
+            }
+            absolute += length
+        }
+
         FileOutputStream(target).use { out ->
+            if (prefix.isNotEmpty()) consume(prefix, prefix.size, out)
             val buf = ByteArray(64 * 1024)
             while (true) {
                 val n = input.read(buf)
                 if (n < 0) break
-                out.write(buf, 0, n)
-                for (i in PARTIAL_MD5_OFFSETS.indices) {
-                    val start = PARTIAL_MD5_OFFSETS[i]; val end = start + 1024
-                    val blockEnd = absolute + n
-                    if (blockEnd <= start || absolute >= end) continue
-                    val from = maxOf(absolute, start); val to = minOf(blockEnd, end)
-                    val src = (from - absolute).toInt(); val dst = (from - start).toInt(); val len = (to - from).toInt()
-                    System.arraycopy(buf, src, digestChunks[i], dst, len); counts[i] = maxOf(counts[i], dst + len)
-                }
-                absolute += n
+                consume(buf, n, out)
             }
         }
         val md = java.security.MessageDigest.getInstance("MD5")

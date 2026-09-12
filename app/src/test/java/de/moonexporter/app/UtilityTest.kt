@@ -1,6 +1,7 @@
 package de.moonexporter.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -36,5 +37,18 @@ class UtilityTest {
     @Test fun `article sorting ignores common prefixes`() {
         assertEquals(sortTitle("The Example Book"), sortTitle("Example Book"))
         assertEquals(sortTitle("Der Beispielroman"), sortTitle("Beispielroman"))
+    }
+
+    @Test fun `mrpro tag mapping accepts one based and zero based candidates`() {
+        val names = listOf("mrbooks.db", "positions10.xml", "Synthetic Book.epub")
+        assertEquals(listOf("mrbooks.db", "positions10.xml", "1.tag"), MoonImporter.mrproLogicalCandidates("1.tag", names))
+        assertEquals(listOf("mrbooks.db", "0.tag"), MoonImporter.mrproLogicalCandidates("0.tag", names))
+    }
+
+    @Test fun `detects sqlite database signature in numbered tag`() {
+        val valid = "SQLite format 3\u0000synthetic".toByteArray(Charsets.US_ASCII)
+        val invalid = "not a sqlite file".toByteArray(Charsets.US_ASCII)
+        assertTrue(MoonImporter.looksLikeSqliteHeader(valid))
+        assertFalse(MoonImporter.looksLikeSqliteHeader(invalid))
     }
 }

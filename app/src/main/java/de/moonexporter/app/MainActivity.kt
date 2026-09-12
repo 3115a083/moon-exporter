@@ -17,13 +17,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -44,7 +47,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -81,7 +83,7 @@ private fun MoonExporterApp(context: Context) {
     var books by remember { mutableStateOf<List<BookItem>>(emptyList()) }
     val selected = remember { mutableStateMapOf<String, Boolean>() }
     var filter by remember { mutableStateOf(BookFilter.ALL) }
-    var status by remember { mutableStateOf(tr("Moon+ Ordner oder .mrpro Backup auswählen.", "Choose a Moon+ folder or .mrpro backup.")) }
+    var status by remember { mutableStateOf(tr("Moon+ Backup-Datei auswählen.", "Choose a Moon+ backup file.")) }
     var busy by remember { mutableStateOf(false) }
     var activeJob by remember { mutableStateOf<Job?>(null) }
     var exportMode by remember { mutableStateOf(ExportMode.FULL) }
@@ -116,7 +118,9 @@ private fun MoonExporterApp(context: Context) {
             status = tr("Moon+ Ordner wird eingelesen…", "Reading Moon+ folder…")
             val result = MoonImporter.scanFolder(context, uri) { status = it }
             setBooks(result)
-            status = tr("${result.size} Bücher gefunden.", "${result.size} books found.")
+            status = if (result.isEmpty()) {
+                tr("Keine Bücher erkannt. Prüfe Quelle oder Diagnose.", "No books detected. Check source or diagnostics.")
+            } else tr("${result.size} Bücher gefunden.", "${result.size} books found.")
         }, tr("Einlesen abgebrochen", "Import cancelled"))
     }
 
@@ -167,10 +171,14 @@ private fun MoonExporterApp(context: Context) {
             }
         }
     }
+    val selectedCount = selected.count { it.value }
 
     MaterialTheme(colorScheme = lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Moon Exporter", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
@@ -180,8 +188,8 @@ private fun MoonExporterApp(context: Context) {
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Button(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Ordner", "Folder")) }
-                    OutlinedButton(onClick = { mrproPicker.launch(arrayOf("application/zip", "application/octet-stream")) }, enabled = !busy) { Text(".mrpro") }
+                    Button(onClick = { mrproPicker.launch(arrayOf("application/zip", "application/octet-stream")) }, enabled = !busy) { Text(tr("Backup öffnen", "Open backup")) }
+                    OutlinedButton(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Ordner", "Folder")) }
                     OutlinedButton(onClick = { epubPicker.launch(arrayOf("application/epub+zip", "application/octet-stream")) }, enabled = !busy && books.isNotEmpty()) { Text(tr("EPUBs zuordnen", "Match EPUBs")) }
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -205,7 +213,7 @@ private fun MoonExporterApp(context: Context) {
                             modifier = Modifier.height(40.dp),
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                         ) { Text(tr("Auswahl leeren", "Clear selection")) }
-                        Text("${selected.count { it.value }}", modifier = Modifier.align(Alignment.CenterVertically))
+                        Text("$selectedCount", modifier = Modifier.align(Alignment.CenterVertically))
                     }
 
                     val listState = rememberLazyListState()
@@ -217,26 +225,35 @@ private fun MoonExporterApp(context: Context) {
                         }
                         FastScroller(visibleBooks, listState, Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(24.dp))
                     }
-
-                    ExportControls(exportMode, { exportMode = it }, diagnostic, { diagnostic = it }) {
-                        exportPicker.launch(null)
+                } else {
+                    Card(Modifier.fillMaxWidth()) {
+                        Text(
+                            tr("Noch keine Bücher geladen. Export- und Servereinstellungen bleiben erreichbar.", "No books loaded yet. Export and server settings remain available."),
+                            modifier = Modifier.padding(10.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
-                    SyncControls(
-                        serverType, { serverType = it }, serverUrl, { serverUrl = it }, username, { username = it }, password, { password = it }, deviceId, { deviceId = it }, busy,
-                        onTest = {
-                            launchWork({
-                                status = KoSyncClient.authenticate(SyncConfig(serverType, serverUrl, username, password, deviceId))
-                            }, tr("Übertragung abgebrochen", "Transfer cancelled"))
-                        },
-                        onSend = {
-                            val chosen = books.filter { selected[it.key] == true }
-                            launchWork({
-                                KoSyncClient.uploadProgress(SyncConfig(serverType, serverUrl, username, password, deviceId), chosen) { status = it }
-                                status = tr("Fortschritt übertragen.", "Progress sent.")
-                            }, tr("Übertragung abgebrochen", "Transfer cancelled"))
-                        },
-                    )
                 }
+
+                ExportControls(exportMode, { exportMode = it }, diagnostic, { diagnostic = it }, enabled = !busy && selectedCount > 0) {
+                    exportPicker.launch(null)
+                }
+                SyncControls(
+                    serverType, { serverType = it }, serverUrl, { serverUrl = it }, username, { username = it }, password, { password = it }, deviceId, { deviceId = it }, busy,
+                    canSend = selectedCount > 0,
+                    onTest = {
+                        launchWork({
+                            status = KoSyncClient.authenticate(SyncConfig(serverType, serverUrl, username, password, deviceId))
+                        }, tr("Übertragung abgebrochen", "Transfer cancelled"))
+                    },
+                    onSend = {
+                        val chosen = books.filter { selected[it.key] == true }
+                        launchWork({
+                            KoSyncClient.uploadProgress(SyncConfig(serverType, serverUrl, username, password, deviceId), chosen) { status = it }
+                            status = tr("Fortschritt übertragen.", "Progress sent.")
+                        }, tr("Übertragung abgebrochen", "Transfer cancelled"))
+                    },
+                )
             }
         }
     }
@@ -311,13 +328,20 @@ private fun FastScroller(books: List<BookItem>, listState: LazyListState, modifi
 }
 
 @Composable
-private fun ExportControls(mode: ExportMode, setMode: (ExportMode) -> Unit, diagnostic: Boolean, setDiagnostic: (Boolean) -> Unit, onExport: () -> Unit) {
+private fun ExportControls(
+    mode: ExportMode,
+    setMode: (ExportMode) -> Unit,
+    diagnostic: Boolean,
+    setDiagnostic: (Boolean) -> Unit,
+    enabled: Boolean,
+    onExport: () -> Unit,
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         FilterChip(mode == ExportMode.FULL, { setMode(ExportMode.FULL) }, { Text(tr("Vollständig", "Full")) })
         FilterChip(mode == ExportMode.MARKINGS_ONLY, { setMode(ExportMode.MARKINGS_ONLY) }, { Text(tr("Nur Markierungen", "Marks only")) })
         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(diagnostic, setDiagnostic); Text(tr("Diagnose", "Diagnostics")) }
         Spacer(Modifier.weight(1f))
-        Button(onClick = onExport) { Text(tr("Exportieren", "Export")) }
+        Button(onClick = onExport, enabled = enabled) { Text(tr("Exportieren", "Export")) }
     }
 }
 
@@ -328,7 +352,10 @@ private fun SyncControls(
     user: String, setUser: (String) -> Unit,
     password: String, setPassword: (String) -> Unit,
     deviceId: String, setDeviceId: (String) -> Unit,
-    busy: Boolean, onTest: () -> Unit, onSend: () -> Unit,
+    busy: Boolean,
+    canSend: Boolean,
+    onTest: () -> Unit,
+    onSend: () -> Unit,
 ) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -346,7 +373,7 @@ private fun SyncControls(
             Text(tr("Es werden nur partialMD5 und Fortschritt übertragen, niemals die E-Book-Datei.", "Only partialMD5 and progress are sent, never the ebook file."), style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onTest, enabled = !busy && url.isNotBlank() && user.isNotBlank()) { Text(tr("Verbindung testen", "Test connection")) }
-                Button(onClick = onSend, enabled = !busy && url.isNotBlank() && user.isNotBlank()) { Text(tr("Auswahl übertragen", "Send selection")) }
+                Button(onClick = onSend, enabled = !busy && canSend && url.isNotBlank() && user.isNotBlank()) { Text(tr("Auswahl übertragen", "Send selection")) }
             }
         }
     }
