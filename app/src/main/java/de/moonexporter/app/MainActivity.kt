@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -156,7 +157,7 @@ private fun MoonExporterApp(context: Context) {
     val selectedCount = selected.count { it.value }
     val selectedWithProgress = books.count { selected[it.key] == true && it.position?.percent != null }
     val selectedWithMarks = books.count { selected[it.key] == true && it.hasAnnotations }
-    val missingBookFiles = books.count { selected[it.key] == true && (it.epub?.partialMd5.isNullOrBlank()) }
+    val missingBookFiles = books.count { selected[it.key] == true && it.epub?.partialMd5.isNullOrBlank() }
 
     MaterialTheme(colorScheme = lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
@@ -257,7 +258,7 @@ private fun MoonExporterApp(context: Context) {
 }
 
 @Composable
-private fun StepCard(number: String, title: String, content: @Composable Column.() -> Unit) {
+private fun StepCard(number: String, title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("$number. $title", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
