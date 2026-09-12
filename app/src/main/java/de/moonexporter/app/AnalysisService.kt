@@ -73,8 +73,7 @@ class AnalysisService : Service() {
             update(72, tr("Bücher gefunden. Cover werden geladen…", "Books found. Loading covers…"))
             val enriched = BackupMetadata.enrich(this, reconstructed) { done, total, message ->
                 val percent = if (total <= 0) 95 else (72 + (done.toDouble() / total.toDouble() * 26.0)).toInt().coerceIn(72, 98)
-                AnalysisStore.publishBooks(MoonImporter.reconstructTitles(message.books ?: AnalysisStore.state.value.books), percent, message.text)
-                update(percent, message.text)
+                update(percent, message)
             }
             val finalBooks = MoonImporter.reconstructTitles(enriched)
             val withProgress = finalBooks.count { it.position?.percent != null }
@@ -112,7 +111,7 @@ class AnalysisService : Service() {
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         builder
             .setSmallIcon(if (running) android.R.drawable.stat_sys_download else android.R.drawable.stat_sys_download_done)
-            .setContentTitle(tr("Moon Exporter", "Moon Exporter"))
+            .setContentTitle("Moon Exporter")
             .setContentText(text)
             .setContentIntent(openIntent)
             .setOnlyAlertOnce(true)
