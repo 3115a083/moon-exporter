@@ -2,6 +2,28 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.5 - 2026-09-12
+
+### Changed
+- Restored the straight workflow to: 1. analyze backup, 2. review/select books, 3. choose destination, 4. transfer.
+- Step 3 is visible before analysis completes when the book list is still empty, so server credentials can already be entered.
+- Each book with recovered Moon+ progress but no reliable target book identity offers a direct per-book EPUB/PDF picker.
+- Reading progress is displayed both as percentage text and a determinate progress bar.
+- Numeric/hash-like source names are treated as opaque identifiers and replaced by EPUB metadata when available instead of being presented as a plausible title.
+
+### Fixed
+- Light status/navigation bars now explicitly use dark system icons, preventing white-on-white notification/status icons.
+- Backup analysis now runs in a foreground service with an ongoing Android notification and progress indicator, so normal backgrounding/closing of the activity does not stop analysis.
+- Added a defensive second pass that recovers `.po` reading positions using normalized path/base/stem aliases and adaptive zero-/one-based `.tag` mapping.
+- Fixed cache-free nested EPUB metadata extraction so closing the nested ZIP parser does not close the outer `.mrpro` stream.
+- Cover lookup now handles OPF manifest attributes in any order and resolves relative cover paths such as `../Images/cover.jpg` safely.
+- Manual book assignment preserves the recovered Moon+ reading position while adding title/cover/document hash data needed for target conversion.
+
+### Security and storage
+- Foreground analysis uses only Android data-sync service permissions and the existing SAF URI permission.
+- No ebook is permanently extracted to cache by the background analysis.
+- Notification content contains progress text only and no credentials or book contents.
+
 ## 1.0.4 - 2026-09-12
 
 ### Changed
