@@ -57,4 +57,10 @@ class UtilityTest {
         assertTrue(MoonImporter.looksLikeSqliteHeader(valid))
         assertFalse(MoonImporter.looksLikeSqliteHeader(invalid))
     }
+
+    @Test fun `recognizes opaque numeric and hash book names`() {
+        assertTrue(ProgressRecovery.looksOpaque("123456789.epub"))
+        assertTrue(ProgressRecovery.looksOpaque("0123456789abcdef0123456789abcdef.epub"))
+        assertFalse(ProgressRecovery.looksOpaque("A Real Book Title.epub"))
+    }
 }
