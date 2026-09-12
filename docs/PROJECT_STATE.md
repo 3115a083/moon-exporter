@@ -6,7 +6,7 @@ Updated: 2026-09-12
 
 Moon Exporter is an Android migration tool for historical Moon+ Reader data. It is not an ebook reader and not a general-purpose sync server.
 
-The primary user flow is now explicitly:
+Primary user flow:
 1. Select one Moon+ Reader backup file, especially `.mrpro`.
 2. Reliably discover books, reading progress, annotations and notes.
 3. Keep uncertain book/position mappings visible instead of guessing.
@@ -28,8 +28,8 @@ WebDAV/online backup import is deliberately deferred. It must not compete with s
 Repository: `3115a083/moon-exporter`
 Default branch: `main`
 Application ID / namespace: `de.moonexporter.app`
-Current revision branch: `revision/1.0.1-handoff`
-Revision version: `1.0.1`
+Current revision branch: `revision/1.0.2-stability`
+Revision version: `1.0.2` / versionCode 4
 Minimum Android SDK: 26
 Target Android SDK: 35
 UI: Jetpack Compose
@@ -46,28 +46,27 @@ Implemented areas:
 - Standard KOSync and CWA progress transfer.
 - Cancellation checks in several coroutine paths.
 
-## Confirmed regressions from the standalone rework
+## Revision 1.0.2 fixes
 
-The large rework from commit `278178d` to `1147e207` introduced functional regressions. Revision 1.0.1 itself did not cause them.
-
-Confirmed issues:
-1. The Compose root layout does not correctly consume status-bar/navigation-bar/display-cutout insets. Content can appear behind system bars.
-2. Export and sync/server settings are rendered only inside `if (books.isNotEmpty())`. A failed/empty import therefore makes major app areas disappear.
-3. A valid real `.mrpro` can spend a long time being analyzed and still produce zero books. The importer relies too heavily on `_names.list` mapping for numbered `.tag` entries and lacks a robust SQLite signature fallback.
-4. Empty imports do not provide enough diagnostics about discovered backup components, database detection, tables or fallback sources.
-
-Keep the current visual color direction while repairing these regressions.
+- Root UI consumes `WindowInsets.safeDrawing`, preventing important content from being placed below system bars and display cutouts.
+- Export and server/KOSync controls are no longer conditional on a non-empty book list. They remain visible after a failed or empty import.
+- Export/send actions are disabled until at least one book is selected.
+- Backup-file import is the primary visible import action; folder import remains secondary.
+- Numbered `.tag` entries support both one-based and zero-based `_names.list` candidates.
+- Numbered `.tag` entries are additionally inspected for the SQLite header `SQLite format 3`, so `mrbooks.db` can be recovered independently of filename mapping.
+- `.mrpro` processing enforces the global archive entry count limit.
+- Empty/failed imports now distinguish between no database/positions, recognized-but-unreadable database and recognized database with no readable books.
+- Synthetic regression tests cover tag mapping and SQLite signature detection.
 
 ## Core requirements still missing or incomplete
 
-- Robust `.mrpro` backup-file import across format variants without relying on a single filename mapping mechanism.
 - Manual per-book EPUB/PDF assignment through SAF when a book file is missing or ambiguous.
 - Explicit position quality classification: `EXACT`, `FALLBACK`, `UNRESOLVED`.
 - Exact EPUB CFI only when the actual EPUB is available and the position can be resolved structurally.
 - Reliable Readest output as a clear file/folder structure containing the supported annotations/progress/report data.
 - Reliable CWA and BookLore progress transfer over KOSync with target-specific authentication and useful HTTP errors.
-- Visible import/export/sync progress with real cancellation.
-- Complete German/English localization and responsive layout with correct system insets.
+- Visible import/export/sync progress with real cancellation across all long operations.
+- Complete German/English localization and responsive layout verification.
 - Full final release audit and signed APK verification, beyond debug CI.
 
 ## Import rules
@@ -81,10 +80,9 @@ Book identity must never be guessed when evidence is weak. Use `assignment requi
 
 For `.mrpro`:
 - `_names.list` may help map numbered `.tag` entries but must not be the sole database detector.
-- Add SQLite signature detection using `SQLite format 3`.
-- Diagnose missing/unexpected schemas instead of silently returning an empty result.
+- SQLite signature detection using `SQLite format 3` is required as a fallback.
+- Missing/unexpected schemas must be diagnosed instead of silently returning an empty result.
 - Keep archive entry, file size, total work and traversal protections.
-- Prefer an inexpensive backup inventory before expensive EPUB/hash processing.
 
 ## Output rules
 
@@ -127,25 +125,17 @@ Every test revision should pass at least:
 4. Manifest/permission audit
 5. Repository privacy scan
 
-Before a final release APK additionally perform:
-- release build and signing
-- `apksigner verify`
-- exported-components audit
-- dependency audit
-- source and APK secret/PII scans
-- network security audit
-- archive/XML/SAF audit
+Before a final release APK additionally perform release build/signing, `apksigner verify`, exported-components/dependency/secret/PII/network/archive/XML/SAF audits.
 
 ## Engineering backlog
 
-Priority order:
-1. Fix system-inset and hidden-controls regressions.
-2. Repair `.mrpro` detection and add synthetic SQLite-`.tag` regression tests.
-3. Verify and stabilize Readest export.
-4. Stabilize CWA/BookLore KOSync output, including `partialMD5`, URL/auth handling and failure cases.
-5. Complete manual book assignment and position-quality handling.
-6. Improve UI/performance/localization and long-operation cancellation.
-7. Implement WebDAV only after the above paths are stable.
+Priority order after 1.0.2:
+1. Validate 1.0.2 against synthetic `.mrpro` containers and user test feedback.
+2. Verify and stabilize Readest export.
+3. Stabilize CWA/BookLore KOSync output, including `partialMD5`, URL/auth handling and failure cases.
+4. Complete manual book assignment and position-quality handling.
+5. Improve UI/performance/localization and long-operation cancellation.
+6. Implement WebDAV only after the above paths are stable.
 
 ## Handoff rule
 
