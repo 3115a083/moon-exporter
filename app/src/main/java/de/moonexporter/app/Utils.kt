@@ -6,8 +6,8 @@ import java.text.Normalizer
 import java.util.Locale
 
 internal val PARTIAL_MD5_OFFSETS = longArrayOf(
-    0L, 1L shl 10, 1L shl 12, 1L shl 14, 1L shl 16, 1L shl 18,
-    1L shl 20, 1L shl 22, 1L shl 24, 1L shl 26, 1L shl 28, 1L shl 30,
+    1L shl 9, 1L shl 11, 1L shl 13, 1L shl 15, 1L shl 17, 1L shl 19,
+    1L shl 21, 1L shl 23, 1L shl 25, 1L shl 27, 1L shl 29, 1L shl 31,
 )
 
 internal fun partialMd5(input: InputStream): String {
