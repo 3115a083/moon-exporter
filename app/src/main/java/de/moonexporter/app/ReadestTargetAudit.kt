@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 internal object ReadestTargetAudit {
     internal data class Snapshot(val bookHashes: Set<String>)
@@ -17,11 +18,36 @@ internal object ReadestTargetAudit {
         return added.singleOrNull()
     }
 
+    fun findLikelyHash(context: Context, targetTree: Uri, book: BookItem): String? {
+        val root = booksRoot(context, targetTree) ?: return null
+        val text = root.findFile("library.json")?.let { readText(context, it, 16 * 1024 * 1024) } ?: return null
+        val library = runCatching { JSONArray(text) }.getOrNull() ?: return null
+        val wantedTitle = normalize(book.epub?.title ?: book.title)
+        val wantedIsbn = normalizeIsbn(book.epub?.isbn ?: book.isbn)
+        val matches = mutableListOf<String>()
+        for (i in 0 until library.length()) {
+            val row = library.optJSONObject(i) ?: continue
+            val hash = row.optString("hash").takeIf { it.matches(Regex("^[0-9a-fA-F]{32}$")) } ?: continue
+            val metadata = row.optJSONObject("metadata")
+            if (wantedIsbn != null) {
+                val ids = buildList {
+                    metadata?.optString("isbn")?.takeIf { it.isNotBlank() }?.let(::add)
+                    metadata?.optString("identifier")?.takeIf { it.isNotBlank() }?.let(::add)
+                    metadata?.optJSONArray("altIdentifier")?.let { arr -> for (j in 0 until arr.length()) arr.optString(j).takeIf { it.isNotBlank() }?.let(::add) }
+                }
+                if (ids.any { normalizeIsbn(it) == wantedIsbn }) { matches += hash.lowercase(Locale.ROOT); continue }
+            }
+            val rowTitle = normalize(row.optString("title").ifBlank { metadata?.optString("title").orEmpty() })
+            if (wantedTitle.isNotBlank() && rowTitle == wantedTitle) matches += hash.lowercase(Locale.ROOT)
+        }
+        return matches.distinct().singleOrNull()
+    }
+
     fun validateKnownBook(context: Context, targetTree: Uri, targetHash: String, expectedSize: Long?): Validation {
         val root = booksRoot(context, targetTree) ?: return Validation(false, "Readest/Books fehlt")
         val dir = root.findFile(targetHash)?.takeIf { it.isDirectory } ?: return Validation(false, "Buchordner fehlt")
         cleanupPartFiles(dir)
-        val book = dir.listFiles().firstOrNull { it.isFile && it.name?.substringAfterLast('.', "")?.lowercase() in setOf("epub", "pdf") }
+        val book = dir.listFiles().firstOrNull { it.isFile && it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in setOf("epub", "pdf") }
             ?: return Validation(false, "Buchdatei fehlt")
         if (expectedSize != null && expectedSize > 0L && book.length() != expectedSize) {
             runCatching { book.delete() }
@@ -34,7 +60,7 @@ internal object ReadestTargetAudit {
         val libraryText = readText(context, library, 16 * 1024 * 1024) ?: return Validation(false, "library.json nicht lesbar")
         val arr = runCatching { JSONArray(libraryText) }.getOrNull() ?: return Validation(false, "library.json ungültig")
         var present = false
-        for (i in 0 until arr.length()) if (arr.optJSONObject(i)?.optString("hash") == targetHash) { present = true; break }
+        for (i in 0 until arr.length()) if (arr.optJSONObject(i)?.optString("hash")?.equals(targetHash, true) == true) { present = true; break }
         if (!present) return Validation(false, "Bibliothekseintrag fehlt")
         return Validation(true)
     }
@@ -59,7 +85,7 @@ internal object ReadestTargetAudit {
     private fun bookHashes(context: Context, targetTree: Uri): Set<String> {
         val root = booksRoot(context, targetTree) ?: return emptySet()
         val rx = Regex("^[0-9a-fA-F]{32}$")
-        return root.listFiles().filter { it.isDirectory && it.name?.matches(rx) == true }.mapNotNull { it.name?.lowercase() }.toSet()
+        return root.listFiles().filter { it.isDirectory && it.name?.matches(rx) == true }.mapNotNull { it.name?.lowercase(Locale.ROOT) }.toSet()
     }
 
     private fun booksRoot(context: Context, targetTree: Uri): DocumentFile? {
@@ -70,6 +96,9 @@ internal object ReadestTargetAudit {
             else -> null
         }
     }
+
+    private fun normalize(value: String): String = value.lowercase(Locale.ROOT).replace(Regex("\\s+"), " ").trim()
+    private fun normalizeIsbn(value: String?): String? = value?.uppercase(Locale.ROOT)?.filter { it.isDigit() || it == 'X' }?.takeIf { it.length == 10 || it.length == 13 }
 
     private fun readText(context: Context, file: DocumentFile, max: Int): String? = context.contentResolver.openInputStream(file.uri)?.use { input ->
         val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(16 * 1024); var total = 0
