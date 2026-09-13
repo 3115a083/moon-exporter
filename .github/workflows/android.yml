@@ -38,9 +38,10 @@ jobs:
           grep -q 'android:allowBackup="false"' app/src/main/AndroidManifest.xml
           grep -q 'android:usesCleartextTraffic="true"' app/src/main/AndroidManifest.xml
           grep -q 'isLocalNetworkHost' app/src/main/java/de/moonexporter/app/KoSyncClient.kt
+          grep -q 'android:name=".ExportService"' app/src/main/AndroidManifest.xml
           ! grep -RniE 'READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE' app/src/main/AndroidManifest.xml
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: MoonExporter-1.0.10-debug
+          name: MoonExporter-1.0.11-debug
           path: app/build/outputs/apk/debug/*.apk
