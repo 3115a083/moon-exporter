@@ -66,11 +66,13 @@ internal object ReadestTargetAudit {
         val config = dir.findFile("config.json") ?: return Validation(false, "config.json fehlt")
         var configText = readText(context, config, 8 * 1024 * 1024)
         if (configText == null || runCatching { JSONObject(configText) }.isFailure) {
-            if (restoreBackup(context, dir, "config.moon-exporter.bak.json", config)) {
-                configText = readText(context, config, 8 * 1024 * 1024)
+            val repairedFromBackup = restoreBackup(context, dir, "config.moon-exporter.bak.json", config)
+            if (!repairedFromBackup && dir.findFile("config.moon-exporter.bak.json") == null) {
+                overwriteText(context, config, "{}")
             }
+            configText = readText(context, config, 8 * 1024 * 1024)
             if (configText == null || runCatching { JSONObject(configText) }.isFailure) return Validation(false, "config.json ungültig")
-            return Validation(false, "Unterbrochene config.json aus Sicherung repariert")
+            return Validation(false, if (repairedFromBackup) "Unterbrochene config.json aus Sicherung repariert" else "Unterbrochene erste config.json zurückgesetzt")
         }
 
         val library = root.findFile("library.json") ?: return Validation(false, "library.json fehlt")
@@ -103,7 +105,10 @@ internal object ReadestTargetAudit {
         val library = root.findFile("library.json") ?: return
         val current = readText(context, library, 16 * 1024 * 1024)
         if (current != null && runCatching { JSONArray(current) }.isSuccess) return
-        restoreBackup(context, root, "library.moon-exporter.bak.json", library)
+        val repairedFromBackup = restoreBackup(context, root, "library.moon-exporter.bak.json", library)
+        if (!repairedFromBackup && root.findFile("library.moon-exporter.bak.json") == null) {
+            overwriteText(context, library, "[]")
+        }
     }
 
     private fun restoreBackup(context: Context, dir: DocumentFile, backupName: String, target: DocumentFile): Boolean {
@@ -118,6 +123,11 @@ internal object ReadestTargetAudit {
             true
         }.getOrDefault(false)
     }
+
+    private fun overwriteText(context: Context, target: DocumentFile, text: String): Boolean = runCatching {
+        context.contentResolver.openOutputStream(target.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text); it.flush() } ?: return false
+        true
+    }.getOrDefault(false)
 
     private fun cleanupPartFiles(dir: DocumentFile) {
         dir.listFiles().filter { it.isFile && isPart(it.name) }.forEach { runCatching { it.delete() } }
