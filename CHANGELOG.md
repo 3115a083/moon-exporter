@@ -2,6 +2,27 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.6 - 2026-09-13
+
+### Reading progress
+- Identified the primary reading-progress source in full Moon+ `.mrpro` backups as Android SharedPreferences `shared_prefs/positions10.xml`.
+- Added a dedicated parser for `<string name="book-path">position</string>` entries in `positions10.xml`.
+- Added support for Moon+ position values without a timestamp (`chapter@section#offset:percent%`) as used by `positions10.xml`, while retaining timestamped cloud `.po` values.
+- Progress matching now normalizes full path, basename and stem aliases and avoids ambiguous basename-only matches.
+- Original Moon+ raw position values remain preserved for later structural conversion work.
+- Added regression tests for `positions10.xml`, XML entity decoding, timestamp-free position values and unsafe XML declarations.
+
+### UI
+- Added a draggable and tappable alphabetical A-Z rail for quickly jumping through long book lists.
+- The entire book card toggles selection; the checkbox footprint and surrounding spacing are more compact.
+- Per-book manual ebook assignment remains available when progress was found but the target document identity is missing.
+- The connection-test result is shown directly below the KOSync/CWA/BookLore controls instead of only changing the global status text.
+- Readest copy now distinguishes documented `.mrexpt` annotation import from reading-progress transfer.
+
+### Format handling
+- KOSync/CWA/BookLore continue to receive the normalized percentage value (`0.0..1.0`) plus the preserved source-position context. Exact KOReader EPUB xpointer conversion is not fabricated when the Moon+ structural position cannot be mapped safely.
+- The sample backup used for analysis is not committed to the repository, tests or artifacts.
+
 ## 1.0.5 - 2026-09-12
 
 ### Changed
