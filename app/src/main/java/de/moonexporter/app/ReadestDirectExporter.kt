@@ -169,10 +169,15 @@ internal object ReadestDirectExporter {
         if (!config.has("viewSettings")) config.put("viewSettings", JSONObject())
         if (!config.has("searchConfig")) config.put("searchConfig", JSONObject())
 
+        val moonTimestamp = book.position?.timestampMs
+        val shouldReplaceProgress = !existed || !config.has("progress") || (moonTimestamp != null && moonTimestamp > previousUpdatedAt)
         book.position?.percent?.let { percent ->
-            val moonTimestamp = book.position.timestampMs
-            val shouldReplace = !existed || !config.has("progress") || (moonTimestamp != null && moonTimestamp > previousUpdatedAt)
-            if (shouldReplace) config.put("progress", progressPair(percent))
+            if (shouldReplaceProgress) config.put("progress", progressPair(percent))
+        }
+        if (shouldReplaceProgress) {
+            val chapter = book.position?.chapterOrPage
+            val spineIndex = chapter?.let { epubInfo.navToSpine[it] }
+            if (spineIndex != null) config.put("location", "epubcfi(/6/${2 * (spineIndex + 1)}!)")
         }
         config.put("updatedAt", now)
 
@@ -253,8 +258,8 @@ internal object ReadestDirectExporter {
     }
 
     private fun progressPair(percent: Double): JSONArray {
-        val current = (percent.coerceIn(0.0, 100.0) * 100.0).roundToInt()
-        return JSONArray().put(current).put(10_000)
+        val current = percent.coerceIn(0.0, 100.0).roundToInt()
+        return JSONArray().put(current).put(100)
     }
 
     private fun metadataHash(title: String, authors: List<String>, identifiers: List<String>): String {
