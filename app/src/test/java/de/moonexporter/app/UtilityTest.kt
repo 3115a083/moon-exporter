@@ -56,9 +56,17 @@ class UtilityTest {
         assertEquals("https://books.example.test/api/koreader", KoSyncClient.endpointRoot(config))
     }
 
+    @Test fun `allows http for local network only`() {
+        assertEquals("http://192.168.1.50", KoSyncClient.normalizeBaseUrl("http://192.168.1.50", ServerType.STANDARD_KOSYNC))
+        assertEquals("http://booklore.local", KoSyncClient.normalizeBaseUrl("http://booklore.local", ServerType.STANDARD_KOSYNC))
+        assertTrue(KoSyncClient.isLocalNetworkHost("10.0.0.2"))
+        assertTrue(KoSyncClient.isLocalNetworkHost("172.16.2.5"))
+        assertFalse(KoSyncClient.isLocalNetworkHost("8.8.8.8"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
-    fun `rejects cleartext server url`() {
-        KoSyncClient.normalizeBaseUrl("http://192.0.2.1", ServerType.STANDARD_KOSYNC)
+    fun `rejects public cleartext server url`() {
+        KoSyncClient.normalizeBaseUrl("http://example.com", ServerType.STANDARD_KOSYNC)
     }
 
     @Test fun `partial md5 uses KOReader sampling offsets`() {
