@@ -94,6 +94,7 @@ private fun MoonExporterApp(context: Context) {
     var exportMode by remember { mutableStateOf(ExportMode.MARKINGS_ONLY) }
     var normalizeReadestNames by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf(tr("Wähle eine Moon+ Backup-Datei.", "Choose a Moon+ backup file.")) }
+    var exportProgress by remember { mutableStateOf<Float?>(null) }
     var localBusy by remember { mutableStateOf(false) }
     var activeJob by remember { mutableStateOf<Job?>(null) }
     var serverUrl by remember { mutableStateOf("") }
@@ -148,6 +149,7 @@ private fun MoonExporterApp(context: Context) {
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        exportProgress = null
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -156,6 +158,7 @@ private fun MoonExporterApp(context: Context) {
     }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
+        exportProgress = null
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         launchWork(tr("Import abgebrochen", "Import cancelled")) {
             status = tr("Moon+ Ordner wird analysiert…", "Analyzing Moon+ folder…")
@@ -198,9 +201,14 @@ private fun MoonExporterApp(context: Context) {
         if (uri == null) return@rememberLauncherForActivityResult
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
         val chosen = books.filter { selected[it.key] == true }
+        exportProgress = 0f
         launchWork(tr("Export abgebrochen", "Export cancelled")) {
-            Exporter.export(context, uri, chosen, exportMode, false, normalizeReadestNames) { status = it }
+            Exporter.export(context, uri, chosen, exportMode, false, normalizeReadestNames) { progress ->
+                status = progress.message
+                exportProgress = progress.fraction
+            }
             status = tr("Readest-Export abgeschlossen.", "Readest export complete.")
+            exportProgress = 1f
         }
     }
 
@@ -245,7 +253,7 @@ private fun MoonExporterApp(context: Context) {
                         StepCard("1", tr("Backup analysieren", "Analyze backup")) {
                             Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(tr("Moon+ Backup-Datei auswählen", "Choose Moon+ backup file")) }
                             TextButton(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Alternativ Moon+ Ordner verwenden", "Use Moon+ folder instead")) }
-                            if (analysis.running || localBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            if (analysis.running) LinearProgressIndicator(Modifier.fillMaxWidth())
                             Text(status, style = MaterialTheme.typography.bodySmall)
                             if (analysis.running) Text(tr("Die Analyse läuft als Android-Hintergrundaufgabe weiter. Der Fortschritt ist auch in der Benachrichtigung sichtbar.", "Analysis continues as an Android foreground task. Progress is also visible in the notification."), style = MaterialTheme.typography.labelSmall)
                         }
@@ -316,6 +324,20 @@ private fun MoonExporterApp(context: Context) {
                             }
                         }
                     }
+                    if (exportProgress != null) item {
+                        StepCard("4", tr("Exportfortschritt", "Export progress")) {
+                            Text(status, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                            LinearProgressIndicator(
+                                progress = { exportProgress?.coerceIn(0f, 1f) ?: 0f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                if (localBusy) tr("Der aktuelle Teilschritt steht oben. Bei jedem Buch werden Quelle, Hash, EPUB-Struktur, Markierungen, Buchdatei, config.json und Bibliothek einzeln angezeigt.", "The current sub-step is shown above. For each book, source, hash, EPUB structure, highlights, book file, config.json and library update are shown separately.")
+                                else tr("Export beendet.", "Export finished."),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
                 }
 
                 if (visibleBooks.isNotEmpty()) {
@@ -324,7 +346,7 @@ private fun MoonExporterApp(context: Context) {
                         modifier = Modifier.align(Alignment.CenterEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(end = 4.dp),
                         onBookIndex = { bookIndex -> scope.launch { listState.animateScrollToItem(3 + bookIndex) } },
                         onTop = { scope.launch { listState.animateScrollToItem(0) } },
-                        onBottom = { scope.launch { listState.animateScrollToItem((3 + visibleBooks.size).coerceAtLeast(0)) } },
+                        onBottom = { scope.launch { listState.animateScrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)) } },
                     )
                 }
             }
@@ -376,7 +398,7 @@ private fun ReadestTarget(
     SelectionRow(mode == ExportMode.MARKINGS_ONLY, tr("Nur Markierungen (.mrexpt)", "Highlights only (.mrexpt)")) { setMode(ExportMode.MARKINGS_ONLY) }
     SelectionRow(mode == ExportMode.FULL, tr("Direkt in Readest-Bibliothek", "Directly into Readest library")) { setMode(ExportMode.FULL) }
     if (mode == ExportMode.FULL) {
-        Text(tr("Schreibt die ausgewählten Bücher direkt in Readest/Books, ergänzt library.json und config.json und sichert vorhandene Readest-Metadaten vor Änderungen.", "Writes selected books directly into Readest/Books, updates library.json and config.json, and backs up existing Readest metadata before changes."), style = MaterialTheme.typography.labelSmall)
+        Text(tr("Schreibt Bücher direkt nach Readest/Books. Markierungen werden gegen den Text des tatsächlichen EPUB aufgelöst und nur bei eindeutigem Treffer als echte Readest-Range-CFI geschrieben; nicht auflösbare Einträge bleiben zusätzlich als .mrexpt erhalten.", "Writes books directly into Readest/Books. Highlights are resolved against the actual EPUB text and are only written as real Readest range CFIs when a reliable match is found; unresolved entries remain preserved as .mrexpt."), style = MaterialTheme.typography.labelSmall)
         if (crypticCount > 0) {
             Text(tr("$crypticCount ausgewählte Moon+-Bücher haben kryptische Datei-/Hashnamen. Titel, Autor und ISBN werden soweit möglich aus EPUB, Moon+-Datenbank und Backup-Metadaten rekonstruiert.", "$crypticCount selected Moon+ books have cryptic file/hash names. Title, author and ISBN are reconstructed where possible from the EPUB, Moon+ database and backup metadata."), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Row(
