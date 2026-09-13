@@ -13,13 +13,17 @@ All notable Moon Exporter revisions are recorded here so future development can 
 - A pending session for another target remains blocked.
 - Added regression tests for same-target session replacement, different-target blocking, and source requirements for automatic resume.
 
+### Export status UI
+- Step 4 no longer shows `Export beendet` after a failed or cancelled export simply because the UI coroutine stopped.
+- The footer now distinguishes running, failed/interrupted, interrupted, and successfully completed states.
+
 ### Verification
-- Tested app-code head: `22f20e43701fccbc0c5c1e8ed64b5364a5d42a79`.
-- Android CI run `34780217834`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload.
-- CodeQL run `34780217703`: success.
-- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325540078`.
-- Artifact ZIP digest: `sha256:7ea0f7d2c13a94fd0645c6ee15e5475daddf1812539d0c882123949a855b48ce`.
-- APK SHA256: `2eb67f2842baeba96902d35680510f693828f4ba50154879e62772c4eb2e227c`.
+- Tested app-code head: `c8dd5d8bc5d3317087bbd199677b44e4502e700c`.
+- Android CI run `34781062706`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34781062693`: success.
+- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325086650`.
+- Artifact ZIP digest: `sha256:e4c4698b65e7363ba9618d41edf72b6af962bf249624eb19ff8490773bb7f868`.
+- APK SHA256: `29a64d15e0e9e337274e62b211a655730cc52f36564e856c1aff7ac7d8f1f1df`.
 
 ## 1.0.13 - 2026-09-13
 
