@@ -56,8 +56,16 @@ class UtilityTest {
         assertEquals("https://books.example.test/api/koreader", KoSyncClient.endpointRoot(config))
     }
 
+    @Test fun `allows cleartext only for private home network hosts`() {
+        assertEquals("http://192.168.1.25", KoSyncClient.normalizeBaseUrl("http://192.168.1.25", ServerType.STANDARD_KOSYNC))
+        assertEquals("http://10.0.0.4", KoSyncClient.normalizeBaseUrl("http://10.0.0.4", ServerType.STANDARD_KOSYNC))
+        assertEquals("http://booklore.local", KoSyncClient.normalizeBaseUrl("http://booklore.local", ServerType.STANDARD_KOSYNC))
+        assertTrue(KoSyncClient.isPrivateHttpHost("172.16.0.8"))
+        assertTrue(KoSyncClient.isPrivateHttpHost("server.home.arpa"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
-    fun `rejects cleartext server url`() {
+    fun `rejects public cleartext server url`() {
         KoSyncClient.normalizeBaseUrl("http://192.0.2.1", ServerType.STANDARD_KOSYNC)
     }
 
