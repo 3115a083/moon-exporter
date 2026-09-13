@@ -15,45 +15,51 @@ WebDAV remains deferred until the local backup, Readest and KOSync paths are rel
 
 ## Current revision
 - Repository: `3115a083/moon-exporter`
-- Branch: `revision/1.0.14-refresh-session-sources`
-- PR: #29, open and not merged
-- Version: `1.0.14`, versionCode 16
-- Tested app-code head: `c8dd5d8bc5d3317087bbd199677b44e4502e700c`
-- Android CI run `34781062706`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload
-- CodeQL run `34781062693`: success
-- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325086650`
-- Artifact ZIP digest: `sha256:e4c4698b65e7363ba9618d41edf72b6af962bf249624eb19ff8490773bb7f868`
-- Verified APK SHA256: `29a64d15e0e9e337274e62b211a655730cc52f36564e856c1aff7ac7d8f1f1df`
+- Branch: `revision/1.0.15-selection-snapshot`
+- PR: #31, open and not merged
+- Version: `1.0.15`, versionCode 17
+- Tested app-code head: `03e33cad1f41735af4379de07f954c6dabdc3ca3`
+- Android CI run `34784119249`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload
+- CodeQL run `34784119262`: success
+- Debug artifact: `MoonExporter-1.0.15-debug`, artifact ID `10326485715`
+- Artifact ZIP digest: `sha256:bc6ed4c1a3408851175a54e476f00400c58325dbabf365eeb979f387e9f474de`
+- Verified APK SHA256: `7e2c1c42b832dab077a242f82b460816967b21dfbc1669dd8bdbd9c955fdcd57`
 - Later commits after the tested app-code head update documentation/changelog only and do not alter the APK.
 
-## 1.0.14 stale transfer source recovery
-Real-device feedback from 1.0.13 reported a missing stored book source while the current analyzed book list already contained the book.
+## 1.0.15 explicit selection preservation
+Real-device feedback showed that a book without a usable book file and without reading progress still entered the export although the user had deselected it.
 
 Root cause:
-- `Exporter` reused an unfinished transfer session for the same Readest target without refreshing its persisted BookItem payload.
-- An older interrupted session could therefore still contain `epub = null` from an earlier app/version state.
-- The current UI analysis could have a valid source while the background service kept reading the stale session copy.
+- the UI selection map lived only in Compose `remember` state
+- opening Android's SAF folder picker can recreate the Activity
+- after recreation the analyzed book list can repopulate and rebuild selection defaults before the folder picker result callback runs
+- the callback previously read the then-current selection rather than the set the user had explicitly selected before opening SAF
 
-Binding behavior from 1.0.14:
-- A deliberate manual export retry to the same Readest target never reuses the old unfinished payload verbatim.
+Binding behavior from 1.0.15:
+- the exact selected book keys are snapshotted immediately before opening the Readest folder picker
+- that snapshot uses `rememberSaveable`, so it survives Activity recreation while SAF is open
+- the picker result resolves only those stored keys against the current book list, or the restored analysis list if the local list has not repopulated yet
+- the callback no longer broadens the export based on a rebuilt selection map
+- books with no book file, no reading progress and no annotations are no longer selected by default after a fresh/restored analysis
+- a source-less transfer item is non-fatal in `ExportService`: it is recorded as `SKIPPED_NO_SOURCE`, progress continues, and the rest of the session remains valid
+- if a source-less item contains progress or annotations, the app reports that it was skipped because no book file is assigned; it is never silently reported as transferred
+- source-less items without any transferable user data are skipped losslessly
+- regression tests cover missing-source books with and without user data
+
+## 1.0.14 stale transfer source recovery retained
+- A deliberate manual export retry to the same Readest target never reuses an old unfinished payload verbatim.
 - The old session is marked `SUPERSEDED` and a fresh session is created from the current selected books and current book sources.
 - `completed_books` remains separate and authoritative for already committed fingerprints, so previously validated books can still be revalidated and skipped rather than blindly recopied.
 - App-start automatic resume only starts when every persisted transfer item still has a usable book source.
 - Legacy source-less sessions are left for a manual fresh retry instead of immediately failing again.
-- A pending session for a different target is still blocked to avoid cross-target confusion.
-- Regression tests cover same-target supersession, different-target blocking and auto-resume source requirements.
+- A pending session for a different target remains blocked.
+- Step 4 distinguishes running, interrupted/failed and successfully completed export states.
 
-## 1.0.14 export status UI
-- Step 4 no longer reports success just because the Activity-side coroutine stopped.
-- While running, the verbose sub-step explanation remains visible.
-- On failure/interruption it shows `Export unterbrochen oder fehlgeschlagen.` or `Export unterbrochen.` as appropriate.
-- `Export erfolgreich beendet.` is shown only after a completed export with full progress.
-
-## 1.0.13 deterministic Readest validation retained
+## Deterministic Readest validation retained
 - Before writing a book, `ExportService` calculates the exact Readest partialMD5 from the persisted source ebook.
 - That expected hash is stored in the transfer item and remains the authoritative target identity for the whole book transaction.
 - Post-export validation validates exactly `Readest/Books/<expectedHash>/`.
-- Validation still requires ebook identity, optional known size, valid `config.json`, valid `library.json`, and a matching library row.
+- Validation requires ebook identity, optional known size, valid `config.json`, valid `library.json`, and a matching library row.
 - Exact validation failures report the book title and concrete failed check.
 
 ## Retained resumable export behavior
@@ -87,4 +93,4 @@ Binding behavior from 1.0.14:
 - Android cannot guarantee a final external SAF cleanup callback if uninstall happens exactly during a write. External writes must therefore remain detectable and repairable rather than relying on uninstall cleanup.
 
 ## Development rule
-Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #29 is authoritative for 1.0.14 and must not be merged without explicit user approval.
+Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #31 is authoritative for 1.0.15 and must not be merged without explicit user approval.
