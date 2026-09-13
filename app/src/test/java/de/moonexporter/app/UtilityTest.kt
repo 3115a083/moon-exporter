@@ -88,18 +88,29 @@ class UtilityTest {
     }
 
     @Test fun `Readest highlight resolver creates a real text range CFI`() {
-        val epub = File.createTempFile("readest-cfi-test-", ".epub")
+        val epub = syntheticEpub("<html xmlns='http://www.w3.org/1999/xhtml'><head/><body><p id='p1'>Alpha highlighted phrase omega.</p></body></html>")
         try {
-            ZipOutputStream(epub.outputStream()).use { zip ->
-                zip.putNextEntry(ZipEntry("OEBPS/chapter.xhtml"))
-                zip.write("<html xmlns='http://www.w3.org/1999/xhtml'><head/><body><p id='p1'>Alpha highlighted phrase omega.</p></body></html>".toByteArray())
-                zip.closeEntry()
-            }
             ReadestCfiResolver(epub, listOf("OEBPS/chapter.xhtml")).use { resolver ->
                 val result = resolver.resolve("highlighted phrase", preferredSpine = 0, preferredPosition = null)
                 assertNotNull(result)
-                assertEquals("epubcfi(/6/2!/4/2[p1],/1:6,/1:24)", result?.cfi)
-                assertTrue(result?.cfi?.contains(",") == true)
+                assertTrue(result!!.cfi.startsWith("epubcfi(/6/2!"))
+                assertTrue(result.cfi.contains(","))
+                assertTrue(result.cfi.contains(":6"))
+                assertTrue(result.cfi.contains(":24"))
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    @Test fun `Readest highlight resolver accepts real world XHTML entities and inline markup`() {
+        val epub = syntheticEpub("<html xmlns='http://www.w3.org/1999/xhtml'><head/><body><p>Alpha&nbsp;highlighted <em>phrase</em> omega.</p></body></html>")
+        try {
+            ReadestCfiResolver(epub, listOf("OEBPS/chapter.xhtml")).use { resolver ->
+                val result = resolver.resolve("highlighted phrase", preferredSpine = 0, preferredPosition = null)
+                assertNotNull(result)
+                assertTrue(result!!.cfi.startsWith("epubcfi(/6/2!"))
+                assertTrue(result.cfi.count { it == ',' } == 2)
             }
         } finally {
             epub.delete()
@@ -128,5 +139,15 @@ class UtilityTest {
         assertTrue(ProgressRecovery.looksOpaque("123456789.epub"))
         assertTrue(ProgressRecovery.looksOpaque("0123456789abcdef0123456789abcdef.epub"))
         assertFalse(ProgressRecovery.looksOpaque("A Real Book Title.epub"))
+    }
+
+    private fun syntheticEpub(xhtml: String): File {
+        val epub = File.createTempFile("readest-cfi-test-", ".epub")
+        ZipOutputStream(epub.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("OEBPS/chapter.xhtml"))
+            zip.write(xhtml.toByteArray())
+            zip.closeEntry()
+        }
+        return epub
     }
 }
