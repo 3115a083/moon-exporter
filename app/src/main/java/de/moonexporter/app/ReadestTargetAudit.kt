@@ -20,6 +20,7 @@ internal object ReadestTargetAudit {
 
     fun findLikelyHash(context: Context, targetTree: Uri, book: BookItem): String? {
         val root = booksRoot(context, targetTree) ?: return null
+        repairLibraryIfNeeded(context, root)
         val text = root.findFile("library.json")?.let { readText(context, it, 16 * 1024 * 1024) } ?: return null
         val library = runCatching { JSONArray(text) }.getOrNull() ?: return null
         val wantedTitle = normalize(book.epub?.title ?: book.title)
@@ -45,6 +46,7 @@ internal object ReadestTargetAudit {
 
     fun validateKnownBook(context: Context, targetTree: Uri, targetHash: String, expectedSize: Long?): Validation {
         val root = booksRoot(context, targetTree) ?: return Validation(false, "Readest/Books fehlt")
+        repairLibraryIfNeeded(context, root)
         val dir = root.findFile(targetHash)?.takeIf { it.isDirectory } ?: return Validation(false, "Buchordner fehlt")
         cleanupPartFiles(dir)
         val book = dir.listFiles().firstOrNull { it.isFile && it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in setOf("epub", "pdf") }
@@ -53,9 +55,24 @@ internal object ReadestTargetAudit {
             runCatching { book.delete() }
             return Validation(false, "Unvollständige Buchdatei entfernt")
         }
+        val targetBookHash = runCatching {
+            context.contentResolver.openInputStream(book.uri)?.buffered()?.use(ReadestDirectExporter::readestPartialMd5)
+        }.getOrNull()
+        if (targetBookHash == null || !targetBookHash.equals(targetHash, true)) {
+            runCatching { book.delete() }
+            return Validation(false, "Unvollständige oder falsche Buchdatei entfernt")
+        }
+
         val config = dir.findFile("config.json") ?: return Validation(false, "config.json fehlt")
-        val configText = readText(context, config, 8 * 1024 * 1024) ?: return Validation(false, "config.json nicht lesbar")
-        if (runCatching { JSONObject(configText) }.isFailure) return Validation(false, "config.json ungültig")
+        var configText = readText(context, config, 8 * 1024 * 1024)
+        if (configText == null || runCatching { JSONObject(configText) }.isFailure) {
+            if (restoreBackup(context, dir, "config.moon-exporter.bak.json", config)) {
+                configText = readText(context, config, 8 * 1024 * 1024)
+            }
+            if (configText == null || runCatching { JSONObject(configText) }.isFailure) return Validation(false, "config.json ungültig")
+            return Validation(false, "Unterbrochene config.json aus Sicherung repariert")
+        }
+
         val library = root.findFile("library.json") ?: return Validation(false, "library.json fehlt")
         val libraryText = readText(context, library, 16 * 1024 * 1024) ?: return Validation(false, "library.json nicht lesbar")
         val arr = runCatching { JSONArray(libraryText) }.getOrNull() ?: return Validation(false, "library.json ungültig")
@@ -72,8 +89,29 @@ internal object ReadestTargetAudit {
 
     fun cleanupTargetParts(context: Context, targetTree: Uri) {
         val root = booksRoot(context, targetTree) ?: return
+        repairLibraryIfNeeded(context, root)
         root.listFiles().filter { it.isFile && isPart(it.name) }.forEach { runCatching { it.delete() } }
         root.listFiles().filter { it.isDirectory }.forEach(::cleanupPartFiles)
+    }
+
+    private fun repairLibraryIfNeeded(context: Context, root: DocumentFile) {
+        val library = root.findFile("library.json") ?: return
+        val current = readText(context, library, 16 * 1024 * 1024)
+        if (current != null && runCatching { JSONArray(current) }.isSuccess) return
+        restoreBackup(context, root, "library.moon-exporter.bak.json", library)
+    }
+
+    private fun restoreBackup(context: Context, dir: DocumentFile, backupName: String, target: DocumentFile): Boolean {
+        val backup = dir.findFile(backupName) ?: return false
+        val bytes = context.contentResolver.openInputStream(backup.uri)?.use { input ->
+            val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(16 * 1024); var total = 0
+            while (true) { val n = input.read(buf); if (n < 0) break; total += n; if (total > 16 * 1024 * 1024) return@use null; out.write(buf, 0, n) }
+            out.toByteArray()
+        } ?: return false
+        return runCatching {
+            context.contentResolver.openOutputStream(target.uri, "w")?.use { it.write(bytes); it.flush() } ?: return false
+            true
+        }.getOrDefault(false)
     }
 
     private fun cleanupPartFiles(dir: DocumentFile) {
