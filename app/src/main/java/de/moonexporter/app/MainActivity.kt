@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -290,7 +291,7 @@ private fun FilterDropdown(filter: BookFilter, onFilter: (BookFilter) -> Unit) {
 }
 
 @Composable
-private fun AlphabetScrollbar(books: List<BookItem>, onSection: (String) -> Unit) {
+private fun BoxScope.AlphabetScrollbar(books: List<BookItem>, onSection: (String) -> Unit) {
     val sections = remember(books) { books.map { sectionFor(it.title) }.distinct() }
     var height by remember { mutableStateOf(1) }
     fun choose(y: Float) {
