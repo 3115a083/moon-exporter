@@ -2,6 +2,24 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.10 - 2026-09-13
+
+### Readest highlight regression
+- Fixed the 1.0.9 merge behavior that removed an existing Moon Exporter Readest note before a replacement range CFI had actually been resolved.
+- Existing Readest annotations are now preserved unless a successfully resolved exact Moon+ range is ready to replace the same stable note ID.
+- On a clean direct export, Moon+ annotations that cannot be resolved to an exact text range still remain represented using Readest's chapter fallback instead of disappearing completely.
+- Exact resolved range CFIs continue to take precedence whenever the actual EPUB text can be matched.
+- Unresolved source data remains preserved in `moon-export.mrexpt`; unrelated/native Readest notes are never removed.
+
+### Finished reading status
+- Readest does not infer the library status badge solely from `[100,100]` progress. A Moon+ value of 100% now also writes `readingStatus: "finished"` and updates `readingStatusUpdatedAt`.
+- Sub-100% Moon+ values do not forcibly clear an existing Readest reading status.
+
+### Retained from 1.0.9
+- Direct Readest export still prepares each embedded ebook once instead of repeatedly scanning the full `.mrpro`.
+- The verbose determinate export progress remains at the bottom of the screen.
+- Exact EPUB range-CFI generation remains enabled where text resolution succeeds.
+
 ## 1.0.9 - 2026-09-13
 
 ### Readest export performance
