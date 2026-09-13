@@ -2,6 +2,25 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase. Older entries are intentionally concise; `docs/PROJECT_STATE.md` and the private handoff contain the current binding implementation rules.
 
+## 1.0.12 - 2026-09-13
+
+### Readest target validation
+- Fixed the real-device error `Readest-Ziel konnte nach dem Export nicht eindeutig validiert werden` when the correct Readest hash folder already existed before the current export attempt.
+- Root cause: the service could discover a newly created hash folder or reuse a persisted hash, but if neither existed it fell back to title/ISBN metadata matching. That lookup can legitimately fail even though the exported book itself is valid.
+- Added `ReadestIdentity` as an exact fallback. It computes the Readest partialMD5 from the original source ebook only when the normal fast identity paths cannot resolve the target.
+- Embedded `.mrpro` books reopen only their required archive entry for this fallback and use a temporary app-cache file that is deleted immediately.
+- The exact source hash is used only to identify the target folder. All strict 1.0.11 validation checks still run afterwards, including ebook identity, config validity and the matching `library.json` row.
+- Applied the same exact identity fallback to normal post-export validation and interrupted-export recovery.
+- Added regression tests for the existing-target fallback and hash-resolution precedence.
+
+### Verification
+- Tested app-code head: `774b86f116288c89d8a76d273a206ea9531846f5`.
+- Android CI run `34773493180`: success, including privacy scan, unit tests, lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34773493256`: success.
+- Debug artifact: `MoonExporter-1.0.12-debug`, artifact ID `10323056571`.
+- Artifact ZIP digest: `sha256:4b4c21620f52c96b732cc5c0e1c18bd43d23e6374671ae16c45d7d6127b3db96`.
+- APK SHA256: `214b13021cf72a724c471ffe7b63a804410aa750aed65e4d84c9ebbb96ab0e9e`.
+
 ## 1.0.11 - 2026-09-13
 
 ### Resumable background Readest export
