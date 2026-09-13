@@ -2,6 +2,20 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.7 - 2026-09-13
+
+### Network
+- Allow HTTP for private home-network targets while keeping public HTTP targets blocked by application validation.
+- Accepted cleartext targets include RFC1918 IPv4, loopback/link-local addresses, local IPv6 ranges, single-label LAN hosts and `.local`, `.lan` or `.home.arpa` names.
+- HTTPS remains accepted everywhere and is still recommended.
+- Added regression tests proving private HTTP is accepted and a public cleartext address is rejected.
+
+### UI
+- Added an up arrow above the alphabet rail to jump to the top of the screen.
+- Added a down arrow below the alphabet rail to jump to the destination section at the bottom of the list.
+- Added a dedicated `Ohne Buchdatei` / `Without book file` filter while retaining the existing filters.
+- Updated server copy so the URL field no longer implies HTTPS is mandatory for private LAN targets.
+
 ## 1.0.6 - 2026-09-13
 
 ### Reading progress
