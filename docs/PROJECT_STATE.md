@@ -9,66 +9,102 @@ Binding flow:
 1. Analyze one Moon+ Reader backup, especially `.mrpro`.
 2. Review analyzed books, reading progress and markings, then select individual books.
 3. Choose Readest, generic KOSync, Calibre-Web Automated or BookLore as destination.
-4. Export/transfer the selected books.
+4. Export/transfer the selected books and show transfer progress at the bottom.
 
 WebDAV remains deferred until this local flow is reliable.
 
 ## Current revision
 - Repository: `3115a083/moon-exporter`
-- Branch: `revision/1.0.7-lan-scroll-filter`
-- PR: #18, open and not merged
-- Version: `1.0.7`, versionCode 9
-- Tested app-code head: `941a56e2808ec203ca3cd93bca22afd68821918e`
+- Branch: `revision/1.0.9-readest-speed-annotations`
+- PR: #21, open and not merged
+- Version: `1.0.9`, versionCode 11
+- Tested app-code head: `a2c0e95c83a18b23ce15bd9a3f555761e47c49fe`
 - minSdk 26, targetSdk 35, compileSdk 35
-- Android CI run `34752712899`: success
-- CodeQL run `34752712889`: success
-- Debug artifact: `MoonExporter-1.0.7-debug`, artifact ID `10316652062`
-- Verified APK SHA256: `4bbd6cc58a344231b0816728e6223a340788a03042429b1c70158b046cd63bcd`
+- Android CI run `34763052900`: success
+- CodeQL run `34763052880`: success
+- Debug artifact: `MoonExporter-1.0.9-debug`, artifact ID `10319672483`
+- Verified APK SHA256: `1ef495695eac655e89a55a4ef75d4d79601320e0854716c8266cff9fa260fc79`
+- Documentation commits after the tested head do not change app code.
 
-## 1.0.7 behavior
-- HTTP is allowed for local/home-network sync servers only. Accepted cleartext targets include private IPv4 ranges, loopback, link-local, `.local`, single-label LAN hostnames and local IPv6 ranges. Public HTTP hosts are rejected by `KoSyncClient`; HTTPS remains accepted for all valid public/local hosts.
-- Android cleartext transport is enabled at manifest level only because the app enforces the local-host restriction before opening the connection. Do not remove the app-side gate.
-- The alphabet rail has an up arrow to jump to the top and a down arrow to jump to the bottom, while retaining tap/drag A-Z navigation.
-- Book filtering includes `Ohne Buchdatei` / `Without book file` in addition to existing progress/book filters.
-- Connection-test feedback remains visible inline in the destination section.
+## 1.0.9 Readest export performance
+- A book embedded in `.mrpro` is prepared from the source only once per export. Hashing, EPUB metadata inspection, highlight resolution and target copying reuse the same temporary local book file.
+- This removes the 1.0.8 behavior that could rescan a large `.mrpro` from the beginning multiple times for one book.
+- Temporary ebook files are deleted immediately in `finally`; no durable ebook cache is introduced.
+- Book copy uses larger buffered I/O.
+- Highlight resolution reuses one open EPUB ZIP per book.
 
-## Retained 1.0.6 behavior
-- Full `.mrpro` backups recover reading progress primarily from Android SharedPreferences `shared_prefs/positions10.xml`, using `<string name="book-path">position</string>` entries.
-- Timestamp-free Moon+ position values such as EPUB `chapter@section#offset:percent%` and PDF `page:percent%` are supported. `.po` remains a secondary fallback for other backup variants.
-- Original Moon+ raw position values are preserved.
-- Book cards show title, author, cover/placeholder, percentage, visual progress bar, position calculation method, marking count and document identity.
-- Entire book cards toggle selection. If progress exists but a reliable target book identity is missing, the card offers manual EPUB/PDF assignment through SAF.
-- Alphabetical navigation is optimized for large book lists.
+## 1.0.9 export progress UI
+- The local export progress bar is no longer shown in the backup-analysis card.
+- A dedicated bottom section `4. Exportfortschritt` shows a determinate bar and current detailed phase.
+- Direct Readest export reports seven stages per book: prepare source, calculate Readest ID, inspect EPUB, resolve highlights, copy ebook, write config, update library.
+- The A-Z rail down arrow reaches the actual final list item including the progress section.
 
-## Background analysis and UI
-- `.mrpro` analysis runs in a foreground data-sync service and continues when the Activity is normally backgrounded/closed.
-- An ongoing Android notification shows analysis status/progress.
-- Light system bars use readable dark icons where supported.
-- Embedded EPUB cover/title/author/ISBN enrichment streams from the original backup without persistent ebook cache copies.
-- Numeric/hash-like filenames are treated as opaque identifiers. Metadata is preferred; uncertain names are not guessed.
+## 1.0.9 exact Readest highlights
+1.0.8 wrote only chapter-start CFIs for direct annotations. Readest could list these notes but could not paint the selected text and clicking the note navigated only to the chapter start.
 
-## Hard boundaries
-- KOSync/CWA/BookLore transfer authentication, document identity and reading progress only. Ebook files are never uploaded through these APIs.
-- KOReader-compatible `partialMD5` is used only to identify a book already present at the destination.
+1.0.9 behavior:
+- `ReadestCfiResolver` resolves `AnnotationRecord.original` against actual EPUB XHTML.
+- Moon+ chapter data chooses the preferred EPUB spine section.
+- Readest/Foliate child-node indexing semantics are reproduced for text chunks, virtual nodes, `cfi-inert`, `cfi-skip`, and text offsets.
+- A successful match produces a real EPUB CFI range with start/end offsets.
+- If identical text occurs multiple times, Moon+ source position is used to prefer the closest occurrence.
+- No direct Readest note is generated if the text cannot be resolved safely. The annotation remains losslessly in `moon-export.mrexpt`.
+- Old Moon Exporter-generated notes with the same stable IDs are replaced on re-export so incorrect 1.0.8 chapter-start entries do not remain alongside corrected notes.
+- Native/unrelated Readest notes are preserved.
+- XHTML parsing is bounded and external XML entities/DTDs are disabled.
+- A synthetic EPUB unit test verifies an exact range CFI rather than chapter-only CFI.
+
+## Direct Readest structure
+- `Readest/Books/library.json` is the local library index.
+- Managed books live under `Readest/Books/<Readest bookHash>/`.
+- Moon Exporter may write EPUB/PDF, `cover.png`, `config.json`, and `moon-export.mrexpt` fallback.
+- `nav.json` is a derived Readest cache and is not fabricated.
+- Readest `bookHash` uses Readest's own partialMD5 sampling and is distinct from KOReader/KOSync partialMD5.
+- Existing `library.json` and per-book `config.json` are merged and backed up before the first Moon Exporter modification.
+- Existing book files with the same Readest hash are not duplicated.
+- Percentage progress is a transparent fallback, not a real Readest page count.
+- Do not fabricate Readest XPointer fields. Add them only if they can be generated exactly according to Readest's transformed document model.
+
+## Cryptic Moon+ filenames
+- Numeric/hash-like Moon+ filenames are technical identifiers, not trustworthy titles.
+- Readest direct export offers optional normalized output filenames reconstructed from EPUB metadata first, then recovered Moon+ database/backup metadata.
+- Original Moon+ backup and ebook files are never renamed or modified.
+
+## Moon+ reading progress
+- Full `.mrpro` backups recover progress primarily from `shared_prefs/positions10.xml` SharedPreferences entries.
+- EPUB positions commonly use `chapter@section#characterOffset:percent%`; PDF uses `page:percent%`.
+- Timestamped `.po` remains a fallback for other Moon+ variants.
+- Original raw positions are always preserved.
+
+## KOSync/CWA/BookLore
+- Transfer authentication, document identity and reading progress only. Ebook files are never uploaded through these APIs.
+- KOReader-compatible `partialMD5` identifies a book already present at the target.
 - Moon+ percent `0..100` is normalized to KOSync `percentage` `0..1`.
-- Exact target positions must never be invented. Percentage fallback/unresolved states remain valid until structural translation is justified.
-- `.an` markings are preserved and exported through Moon+/Readest-compatible `.mrexpt` handling.
+- HTTP is allowed only for private/local home-network targets; public cleartext HTTP remains blocked.
+- Never invent KOReader XPointer values.
+
+## UI retained behavior
+- Whole book cards toggle selection.
+- Missing target ebook can be assigned manually through SAF without losing recovered Moon+ progress.
+- A-Z fast rail is tappable/draggable and has top/bottom arrows.
+- Filters include `Ohne Buchdatei`.
+- Analysis runs as a non-exported foreground `dataSync` service with notification progress.
+- System bars remain inset-safe and readable.
 
 ## Security and privacy
 - No telemetry, analytics, ads or cloud crash reporting.
-- No real user backup data in source, tests, logs or CI artifacts.
+- No real user backup, Readest or ebook data in source, tests, logs or CI artifacts.
 - SAF only for user files. No broad storage permissions.
 - `android:allowBackup="false"`.
-- Cleartext transport is manifest-enabled only to support explicitly requested local-network HTTP. Public HTTP is blocked in `KoSyncClient`.
-- Foreground service is non-exported and uses `dataSync` type.
 - No credential/Auth-header logging.
+- Temporary export ebooks must be removed after use.
 
 ## Still incomplete / next priorities
-1. Continue validating progress recovery against complete real backups.
-2. Improve exact book identity matching when Moon+ uses cryptic identifiers, using all available backup metadata before requiring manual assignment.
-3. Add explicit position-quality model `EXACT`, `FALLBACK`, `UNRESOLVED` and structural EPUB translation where possible.
-4. Verify Readest file/folder output end-to-end against real Readest imports and report converted/unconverted markings.
-5. Harden CWA/BookLore/generic KOSync error handling and per-book results.
+1. Real-device test 1.0.9 against the same book used for 1.0.8, measuring export time and checking visible/clickable highlights.
+2. Count and surface unresolved real annotations when XHTML/text differs from Moon+ source data; never invent a position.
+3. Improve exact Readest reading-resume translation beyond percentage/chapter fallback.
+4. Add explicit position-quality model `EXACT`, `FALLBACK`, `UNRESOLVED` in data model/UI.
+5. Harden CWA/BookLore/generic KOSync real error handling and per-book results.
 6. Complete localization/responsive UI and final release/signing/security audit.
 7. WebDAV only after the above is stable.
 
