@@ -5,9 +5,6 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import org.xmlpull.v1.XmlPullParser
-import org.xmlpull.v1.XmlPullParserFactory
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.zip.ZipInputStream
@@ -74,24 +71,20 @@ internal object ProgressRecovery {
     internal fun parsePositionsPreferences(bytes: ByteArray, out: MutableMap<String, MoonPosition>) {
         val xml = bytes.toString(Charsets.UTF_8)
         if (Regex("<!DOCTYPE|<!ENTITY", RegexOption.IGNORE_CASE).containsMatchIn(xml)) return
-        runCatching {
-            val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = true }
-            val parser = factory.newPullParser()
-            runCatching { parser.setFeature("http://xmlpull.org/v1/doc/features.html#process-docdecl", false) }
-            parser.setInput(ByteArrayInputStream(bytes), "UTF-8")
-            var type = parser.eventType
-            while (type != XmlPullParser.END_DOCUMENT) {
-                if (type == XmlPullParser.START_TAG && parser.name.equals("string", true)) {
-                    val key = (0 until parser.attributeCount).firstNotNullOfOrNull { i ->
-                        if (parser.getAttributeName(i).equals("name", true)) parser.getAttributeValue(i) else null
-                    }
-                    val value = runCatching { parser.nextText() }.getOrNull()
-                    if (!key.isNullOrBlank() && !value.isNullOrBlank()) addPosition(out, key, value)
-                }
-                type = parser.next()
-            }
+        val strings = Regex("<string\\b([^>]*)>(.*?)</string>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val nameAttribute = Regex("\\bname\\s*=\\s*[\"']([^\"']*)[\"']", RegexOption.IGNORE_CASE)
+        for (match in strings.findAll(xml)) {
+            val key = nameAttribute.find(match.groupValues[1])?.groupValues?.getOrNull(1)?.xmlUnescape()?.trim().orEmpty()
+            val value = match.groupValues[2].xmlUnescape().trim()
+            if (key.isNotBlank() && value.isNotBlank()) addPosition(out, key, value)
         }
     }
+
+    private fun String.xmlUnescape(): String = replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 
     fun reconstructTitles(books: List<BookItem>): List<BookItem> = books.map { book ->
         val current = book.title.trim()
