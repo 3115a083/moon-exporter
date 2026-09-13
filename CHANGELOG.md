@@ -2,6 +2,30 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.10 - 2026-09-13
+
+### Readest highlight recovery
+- Fixed the 1.0.9 regression where real-world EPUB XHTML could cause all direct Readest highlights to be dropped.
+- Replaced strict Java XML DOM parsing for EPUB content documents with tolerant bounded Jsoup XHTML/HTML parsing.
+- Kept Readest/Foliate-compatible CFI child-node indexing and real range CFIs with start/end offsets.
+- Text matching now normalizes non-breaking spaces, common smart quotes, dash variants and soft hyphens while preserving the source DOM offsets used for the final CFI.
+- Added regression coverage for `&nbsp;` and inline markup inside highlighted text.
+- Unresolved highlights are still never assigned invented positions and remain preserved in `moon-export.mrexpt`.
+
+### Finished reading status
+- Moon+ books with an explicit 100% reading position are now mapped to Readest `readingStatus: "finished"` with `readingStatusUpdatedAt` in addition to progress `[100,100]`.
+- Finished-status matching uses ISBN first, then unique title/author matching against the just-written Readest library entry.
+- Ambiguous matches are not guessed and are surfaced in the final export status.
+- The status pass does not reopen or rehash the ebook, so the 1.0.9 export-speed improvement remains intact.
+
+### Verification
+- Version: 1.0.10 / versionCode 12.
+- Tested app-code head: `05211c62d5600cbdd6d87b078b87787264a713df`.
+- Android CI run `34765408400`: success, including privacy scan, unit tests, Android lint, debug APK build and manifest/permission audit.
+- CodeQL run `34765408386`: success.
+- Debug artifact: `MoonExporter-1.0.10-debug`, artifact ID `10320725510`.
+- APK SHA256: `85f5119185ba07e6ec031d67dd286912c617caffcfd23eecc38907a4f30ea5fc`.
+
 ## 1.0.9 - 2026-09-13
 
 ### Readest export performance
