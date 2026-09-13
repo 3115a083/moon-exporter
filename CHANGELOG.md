@@ -2,6 +2,29 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.7 - 2026-09-13
+
+### Network
+- Added explicitly requested HTTP support for home/local-network KOSync, CWA and BookLore servers.
+- Cleartext HTTP is accepted only for local targets: private IPv4 ranges, loopback, link-local, `.local`, single-label LAN hostnames and local IPv6 ranges.
+- Public `http://` targets remain rejected by `KoSyncClient`; HTTPS remains supported for public and local servers.
+- Android cleartext transport is enabled at manifest level only so the validated LAN HTTP connection can be opened. The application-level local-host gate remains mandatory.
+- Added regression tests that accept local HTTP and reject public HTTP.
+
+### UI
+- Added an up-arrow above the alphabet rail to jump to the top of the screen.
+- Added a down-arrow below the alphabet rail to jump to the bottom/destination section.
+- Kept tap and drag A-Z navigation for large book lists.
+- Added the book filter `Ohne Buchdatei` / `Without book file`.
+- Updated server URL help text to distinguish recommended HTTPS from local-network HTTP.
+
+### Verification
+- Tested app-code head: `941a56e2808ec203ca3cd93bca22afd68821918e`.
+- Android CI run `34752712899`: success, including privacy scan, unit tests, lint, APK build and manifest audit.
+- CodeQL run `34752712889`: success.
+- Debug artifact: `MoonExporter-1.0.7-debug`, artifact ID `10316652062`.
+- APK SHA256: `4bbd6cc58a344231b0816728e6223a340788a03042429b1c70158b046cd63bcd`.
+
 ## 1.0.6 - 2026-09-13
 
 ### Reading progress
