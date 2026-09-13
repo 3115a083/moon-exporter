@@ -31,12 +31,12 @@ internal object ReadestIdentity {
         if (source.backupUri != null && !source.archiveEntryName.isNullOrBlank()) {
             val wanted = source.archiveEntryName.replace('\\', '/').trimStart('/')
             return context.contentResolver.openInputStream(source.backupUri)?.buffered()?.use { raw ->
-                ZipInputStream(raw).use { zip ->
+                ZipInputStream(raw).use zipUse@ { zip ->
                     while (true) {
                         val entry = zip.nextEntry ?: break
                         if (entry.isDirectory) continue
                         if (entry.name.replace('\\', '/').trimStart('/') == wanted) {
-                            return@use ReadestDirectExporter.readestPartialMd5(zip)
+                            return@zipUse ReadestDirectExporter.readestPartialMd5(zip)
                         }
                     }
                     null
