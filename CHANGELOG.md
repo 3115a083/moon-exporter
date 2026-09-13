@@ -2,6 +2,26 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.6 - 2026-09-13
+
+### Fixed
+- Corrected the primary Moon+ reading-progress extraction path after inspecting a trimmed real `.mrpro` backup. Moon+ `positions10.xml` is an Android SharedPreferences XML file and stores positions as `<string name="book key">Moon position</string>` entries. The importer now parses that representation instead of expecting filename/position attributes.
+- Kept `.po` recovery as an additional fallback and prefers the newest timestamp when multiple Moon+ position sources exist.
+- Position matching normalizes full path, basename and filename stem aliases and removes Moon+'s leading `?` path marker.
+- Added a synthetic regression test for the observed `positions10.xml` SharedPreferences structure without including real user data.
+- Connection testing now shows an inline testing/success/error result in the destination section.
+
+### Changed
+- Added a draggable alphabet scrollbar on the right side of the book list. Available initial letters are shown and can be tapped or dragged to jump through large libraries.
+- Tapping anywhere on a book card toggles selection.
+- Reduced checkbox footprint and horizontal spacing in book cards.
+- The per-book ebook picker is shown only when Moon+ progress exists but the app still lacks a reliable ebook/document identity needed for target conversion.
+
+### Conversion behavior
+- Moon+ raw values remain preserved, including timestamp, chapter/page, section, character offset and percentage when present.
+- KOSync/CWA/BookLore use the recovered percentage as KOReader-compatible `percentage` in the 0..1 range and retain the human-readable percentage progress string. A matching ebook supplies the KOReader-compatible document `partialMD5`; the ebook itself is never uploaded.
+- Readest markings continue to use Moon+ `.mrexpt`. Reading progress is preserved for reporting/fallback and must not be represented by an invented EPUB CFI when structural resolution is unavailable.
+
 ## 1.0.5 - 2026-09-12
 
 ### Changed
