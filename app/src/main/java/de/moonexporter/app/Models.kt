@@ -64,6 +64,6 @@ internal data class BookItem(
     val hasBookFile: Boolean get() = epub?.uri != null || epub?.embeddedPath != null || (epub?.backupUri != null && !epub.archiveEntryName.isNullOrBlank())
 }
 
-internal enum class BookFilter { ALL, WITH_PROGRESS, WITHOUT_PROGRESS, WITH_BOOK }
+internal enum class BookFilter { ALL, WITH_PROGRESS, WITHOUT_PROGRESS, WITH_BOOK, WITHOUT_BOOK }
 internal enum class ExportMode { FULL, MARKINGS_ONLY }
 internal enum class ServerType { STANDARD_KOSYNC, CALIBRE_WEB_AUTOMATED, BOOKLORE }
