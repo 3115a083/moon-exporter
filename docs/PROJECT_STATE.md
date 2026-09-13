@@ -18,8 +18,14 @@ WebDAV remains deferred until this local flow is reliable.
 - Branch: `revision/1.0.11-resumable-export`
 - PR: #24, open and not merged
 - Version: `1.0.11`, versionCode 13
+- Tested branch head: `9fa1a85a1fa4419fe95c4318497aace886f6b6e7`
+- Final app-code head: `790f38bd2bf13f46252b9250730f3e1e133f2386`; later commits through the tested branch head are documentation only.
 - minSdk 26, targetSdk 35, compileSdk 35
-- Final CI/CodeQL IDs and APK hash are recorded after the final app-code head succeeds.
+- Android CI run `34771458017`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34771458096`: success.
+- Debug artifact: `MoonExporter-1.0.11-debug`, artifact ID `10322436083`.
+- Artifact ZIP digest: `sha256:6d188d8ee07f2c2b643af51b495f9edb6f05b1058bdb44b9eb594800f850963a`.
+- Verified APK SHA256: `b3d5749d2177d68a3e61d8ef5c6d184e1a1b5327127e366ec3e71ceaeb8b9532`.
 
 ## 1.0.11 reliability goal
 Real-device testing showed that direct Readest export could stop when the activity left the foreground. A process interruption could leave a copied book folder without a matching `library.json` row or leave a file only partly written.
