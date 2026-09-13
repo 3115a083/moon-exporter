@@ -82,16 +82,21 @@ internal object ReadestTargetAudit {
         return Validation(true)
     }
 
-    fun repairKnownInterrupted(context: Context, targetTree: Uri, targetHash: String?, expectedSize: Long?): Validation {
-        if (targetHash.isNullOrBlank()) return Validation(false, "Zielbuch noch nicht eindeutig ermittelt")
-        return validateKnownBook(context, targetTree, targetHash, expectedSize)
-    }
-
     fun cleanupTargetParts(context: Context, targetTree: Uri) {
         val root = booksRoot(context, targetTree) ?: return
         repairLibraryIfNeeded(context, root)
         root.listFiles().filter { it.isFile && isPart(it.name) }.forEach { runCatching { it.delete() } }
         root.listFiles().filter { it.isDirectory }.forEach(::cleanupPartFiles)
+    }
+
+    fun cleanupRecoveryArtifacts(context: Context, targetTree: Uri) {
+        val root = booksRoot(context, targetTree) ?: return
+        root.listFiles().filter { it.isFile && (isPart(it.name) || it.name.equals("library.moon-exporter.bak.json", true)) }
+            .forEach { runCatching { it.delete() } }
+        root.listFiles().filter { it.isDirectory }.forEach { dir ->
+            dir.listFiles().filter { file -> file.isFile && (isPart(file.name) || file.name.equals("config.moon-exporter.bak.json", true)) }
+                .forEach { runCatching { it.delete() } }
+        }
     }
 
     private fun repairLibraryIfNeeded(context: Context, root: DocumentFile) {
