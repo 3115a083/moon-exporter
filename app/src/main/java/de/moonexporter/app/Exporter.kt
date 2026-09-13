@@ -1,9 +1,11 @@
 package de.moonexporter.app
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -24,7 +26,15 @@ internal object Exporter {
     ) = withContext(Dispatchers.IO) {
         if (mode == ExportMode.FULL) {
             val store = TransferStore(context.applicationContext)
-            val sessionId = store.createSession(targetTree, normalizeReadestNames, books)
+            val pending = store.latestUnfinishedSession()
+            val sessionId = when {
+                pending == null -> store.createSession(targetTree, normalizeReadestNames, books)
+                pending.targetUri == targetTree -> pending.id
+                else -> {
+                    store.close()
+                    error(tr("Es existiert noch ein unterbrochener Readest-Export für ein anderes Ziel. Öffne die App erneut mit Zugriff auf dieses Ziel oder beende/repariere zuerst diesen Auftrag.", "An interrupted Readest export for another target still exists. Resume or repair it before starting a different target."))
+                }
+            }
             val intent = Intent(context, ExportService::class.java)
                 .setAction(ExportService.ACTION_START)
                 .putExtra(ExportService.EXTRA_SESSION_ID, sessionId)
@@ -46,6 +56,12 @@ internal object Exporter {
                     }
                     delay(350)
                 }
+            } catch (e: CancellationException) {
+                val activity = context as? Activity
+                if (activity != null && !activity.isFinishing && !activity.isChangingConfigurations) {
+                    runCatching { context.startService(Intent(context, ExportService::class.java).setAction(ExportService.ACTION_CANCEL)) }
+                }
+                throw e
             } finally { store.close() }
         }
 
