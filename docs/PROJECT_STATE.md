@@ -15,36 +15,48 @@ WebDAV remains deferred until the local backup, Readest and KOSync paths are rel
 
 ## Current revision
 - Repository: `3115a083/moon-exporter`
-- Branch: `revision/1.0.13-export-result-hash`
-- PR: #27, open and not merged
-- Version: `1.0.13`, versionCode 15
-- Tested app-code head: `6918cfdc6483069b5742e0aa28cf6d8fe413af25`
-- Android CI run `34775655809`: success, including privacy scan, unit tests, lint, debug APK, manifest/permission audit and artifact upload
-- CodeQL run `34775655830`: success
-- Debug artifact: `MoonExporter-1.0.13-debug`, artifact ID `10323835806`
-- Artifact ZIP digest: `sha256:a51d0ab9b32034224a92915f62724be6adeb1daf7ac1df24a2d538260e7c0f5b`
-- Verified APK SHA256: `6a548c315d87a6b355c902bed1768c03f99ba7a5fcf1826f2d6db514fd855306`
+- Branch: `revision/1.0.14-refresh-session-sources`
+- PR: #29, open and not merged
+- Version: `1.0.14`, versionCode 16
+- Tested app-code head: `22f20e43701fccbc0c5c1e8ed64b5364a5d42a79`
+- Android CI run `34780217834`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload
+- CodeQL run `34780217703`: success
+- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325540078`
+- Artifact ZIP digest: `sha256:7ea0f7d2c13a94fd0645c6ee15e5475daddf1812539d0c882123949a855b48ce`
+- Verified APK SHA256: `2eb67f2842baeba96902d35680510f693828f4ba50154879e62772c4eb2e227c`
 
-## 1.0.13 deterministic Readest validation
-Real-device feedback showed that 1.0.12 could still report `Readest-Ziel konnte nach dem Export nicht eindeutig validiert werden`.
+## 1.0.14 stale transfer source recovery
+Real-device feedback from 1.0.13 reported `Keine Buchdatei für ... gespeichert` while the current analyzed book list already contained the book.
 
-Binding behavior:
+Root cause:
+- `Exporter` reused an unfinished transfer session for the same Readest target without refreshing its persisted BookItem payload.
+- An older interrupted session could therefore still contain `epub = null` from an earlier app/version state.
+- The current UI analysis could have a valid source while the background service kept reading the stale session copy.
+
+Binding behavior from 1.0.14:
+- A deliberate manual export retry to the same Readest target never reuses the old unfinished payload verbatim.
+- The old session is marked `SUPERSEDED` and a fresh session is created from the current selected books and current book sources.
+- `completed_books` remains separate and authoritative for already committed fingerprints, so previously validated books can still be revalidated and skipped rather than blindly recopied.
+- App-start automatic resume only starts when every persisted transfer item still has a usable book source.
+- Legacy source-less sessions are left for a manual fresh retry instead of immediately failing again.
+- A pending session for a different target is still blocked to avoid cross-target confusion.
+- Regression tests cover same-target supersession, different-target blocking and auto-resume source requirements.
+
+## 1.0.13 deterministic Readest validation retained
 - Before writing a book, `ExportService` calculates the exact Readest partialMD5 from the persisted source ebook.
-- That expected hash is stored in the transfer item immediately and remains the authoritative target identity for the whole book transaction.
-- Post-export validation no longer tries to rediscover the book that was just written. It validates exactly the expected hash folder.
-- If the source hash cannot be calculated before writing, the export stops before target modification and reports a specific source-identity error.
-- If strict validation fails, the UI reports the exact failed target check and book title instead of the former generic ambiguity message.
-- Strict checks remain unchanged: ebook exists, optional known size matches, recomputed Readest partialMD5 matches the hash folder, `config.json` is valid, `library.json` is valid and contains the matching hash row.
-- No validation rule is weakened and no title/ISBN guess is used to commit the just-exported book.
+- That expected hash is stored in the transfer item and remains the authoritative target identity for the whole book transaction.
+- Post-export validation validates exactly `Readest/Books/<expectedHash>/`.
+- Validation still requires ebook identity, optional known size, valid `config.json`, valid `library.json`, and a matching library row.
+- Exact validation failures report the book title and concrete failed check.
 
 ## Retained resumable export behavior
 - Direct Readest export runs in a dedicated non-exported foreground `dataSync` service.
-- `START_REDELIVER_INTENT` plus app-start recovery resumes unfinished sessions.
+- `START_REDELIVER_INTENT` plus app-start recovery resumes valid unfinished sessions.
 - Transfer sessions and per-book checkpoints live in app-private SQLite.
 - A book becomes `DONE` only after target validation succeeds.
 - Completed checkpoints are revalidated before being skipped.
 - Changed Moon+ progress/annotations/source metadata changes the fingerprint and forces reprocessing.
-- Partial/wrong ebook files are rejected by known size/hash checks and rebuilt.
+- Partial/wrong ebook files are rejected by size/hash checks and rebuilt.
 - Corrupt `config.json`/`library.json` can be restored from recovery backups or rebuilt after interrupted first creation.
 - Each failed book gets one immediate repair retry before the session remains interrupted.
 - Recovery `.bak.json` and Moon Exporter `.part` files are removed after a fully verified session.
@@ -68,4 +80,4 @@ Binding behavior:
 - Android cannot guarantee a final external SAF cleanup callback if uninstall happens exactly during a write. External writes must therefore remain detectable and repairable rather than relying on uninstall cleanup.
 
 ## Development rule
-Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #27 is authoritative for 1.0.13 and must not be merged without explicit user approval.
+Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #29 is authoritative for 1.0.14 and must not be merged without explicit user approval.
