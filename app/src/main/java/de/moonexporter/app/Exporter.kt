@@ -5,9 +5,9 @@ import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
+
+internal data class ExportProgress(val message: String, val fraction: Float?)
 
 internal object Exporter {
     suspend fun export(
@@ -17,27 +17,32 @@ internal object Exporter {
         mode: ExportMode,
         includeDiagnostics: Boolean,
         normalizeReadestNames: Boolean = true,
-        onProgress: (String) -> Unit,
+        onProgress: (ExportProgress) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (mode == ExportMode.FULL) {
             val result = ReadestDirectExporter.export(context, targetTree, books, normalizeReadestNames, onProgress)
             val warningSuffix = if (result.skipped > 0) tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped") else ""
-            onProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"))
+            onProgress(ExportProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"), 1f))
             return@withContext
         }
 
         val root = DocumentFile.fromTreeUri(context, targetTree) ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
         val created = mutableListOf<DocumentFile>()
         try {
+            val total = books.size.coerceAtLeast(1)
             books.forEachIndexed { index, book ->
                 coroutineContext.ensureActive()
-                onProgress(tr("Export ${index + 1}/${books.size}: ${book.title}", "Export ${index + 1}/${books.size}: ${book.title}"))
+                onProgress(ExportProgress(
+                    tr("Buch ${index + 1}/${books.size}: Markierungen als .mrexpt schreiben · ${book.title}", "Book ${index + 1}/${books.size}: writing highlights as .mrexpt · ${book.title}"),
+                    index.toFloat() / total,
+                ))
                 if (book.hasAnnotations) {
                     val file = createUnique(root, "${safeName(book.title)}.mrexpt", "text/plain").also(created::add)
                     writeText(context, file, mrexptFor(book))
                 }
             }
             if (includeDiagnostics) {
+                onProgress(ExportProgress(tr("Diagnosebericht schreiben", "Writing diagnostic report"), 0.95f))
                 val diagnostic = createUnique(root, "moon-exporter-diagnostic.json", "application/json").also(created::add)
                 writeText(context, diagnostic, diagnosticJson(books, mode))
             }
@@ -45,26 +50,6 @@ internal object Exporter {
             created.asReversed().forEach { runCatching { it.delete() } }
             throw t
         }
-    }
-
-    private fun copyArchiveEntry(context: Context, backupUri: android.net.Uri, archiveEntryName: String, output: java.io.OutputStream) {
-        val wanted = archiveEntryName.replace('\\', '/').trimStart('/')
-        var found = false
-        context.contentResolver.openInputStream(backupUri)?.use { raw ->
-            ZipInputStream(raw.buffered()).use { zip ->
-                while (true) {
-                    val entry = zip.nextEntry ?: break
-                    if (entry.isDirectory) continue
-                    val clean = entry.name.replace('\\', '/').trimStart('/')
-                    if (clean == wanted) {
-                        zip.copyTo(output, 64 * 1024)
-                        found = true
-                        break
-                    }
-                }
-            }
-        } ?: error(tr("Backup konnte nicht erneut geöffnet werden", "Could not reopen backup"))
-        if (!found) error(tr("Buchdatei wurde im Backup nicht wiedergefunden", "Book file was not found again in the backup"))
     }
 
     internal fun mrexptFor(book: BookItem): String {
