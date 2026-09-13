@@ -78,6 +78,11 @@ class UtilityTest {
         assertEquals(1L shl 31, PARTIAL_MD5_OFFSETS.last())
     }
 
+    @Test fun `Readest partial md5 matches Readest sampling`() {
+        val bytes = ByteArray(5_000_000) { (it % 251).toByte() }
+        assertEquals("94c784935ab8dda597646e9bc916bbad", ReadestDirectExporter.readestPartialMd5(ByteArrayInputStream(bytes)))
+    }
+
     @Test fun `article sorting ignores common prefixes`() {
         assertEquals(sortTitle("The Example Book"), sortTitle("Example Book"))
         assertEquals(sortTitle("Der Beispielroman"), sortTitle("Beispielroman"))
