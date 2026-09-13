@@ -6,7 +6,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.InputStream
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 
@@ -17,10 +16,11 @@ internal object Exporter {
         books: List<BookItem>,
         mode: ExportMode,
         includeDiagnostics: Boolean,
+        normalizeReadestNames: Boolean = true,
         onProgress: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (mode == ExportMode.FULL) {
-            val result = ReadestDirectExporter.export(context, targetTree, books, onProgress)
+            val result = ReadestDirectExporter.export(context, targetTree, books, normalizeReadestNames, onProgress)
             val warningSuffix = if (result.skipped > 0) tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped") else ""
             onProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"))
             return@withContext
@@ -45,22 +45,6 @@ internal object Exporter {
             created.asReversed().forEach { runCatching { it.delete() } }
             throw t
         }
-    }
-
-    private fun exportBook(context: Context, root: DocumentFile, book: BookItem, created: MutableList<DocumentFile>) {
-        val match = book.epub ?: return
-        val extension = match.fileName.substringAfterLast('.', book.extension).ifBlank { book.extension }
-        val target = createUnique(root, "${safeName(book.title)}.$extension", mimeFor(extension)).also(created::add)
-        context.contentResolver.openOutputStream(target.uri, "w")?.use { output ->
-            when {
-                match.uri != null -> context.contentResolver.openInputStream(match.uri)?.use { it.copyTo(output, 64 * 1024) }
-                    ?: error(tr("Quelldatei konnte nicht geöffnet werden", "Could not open source file"))
-                match.backupUri != null && !match.archiveEntryName.isNullOrBlank() -> copyArchiveEntry(context, match.backupUri, match.archiveEntryName, output)
-                match.embeddedPath != null -> File(match.embeddedPath).takeIf { it.isFile }?.inputStream()?.use { it.copyTo(output, 64 * 1024) }
-                    ?: error(tr("Temporäre Quelldatei fehlt", "Temporary source file is missing"))
-                else -> error(tr("Keine Buchdatei zugeordnet", "No book file matched"))
-            }
-        } ?: error(tr("Zieldatei konnte nicht geöffnet werden", "Could not open target file"))
     }
 
     private fun copyArchiveEntry(context: Context, backupUri: android.net.Uri, archiveEntryName: String, output: java.io.OutputStream) {
@@ -125,12 +109,6 @@ internal object Exporter {
     private fun writeText(context: Context, file: DocumentFile, text: String) {
         context.contentResolver.openOutputStream(file.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
             ?: error(tr("Datei konnte nicht geschrieben werden", "Could not write file"))
-    }
-
-    private fun mimeFor(extension: String): String = when (extension.lowercase()) {
-        "epub" -> "application/epub+zip"
-        "pdf" -> "application/pdf"
-        else -> "application/octet-stream"
     }
 
     private fun diagnosticJson(books: List<BookItem>, mode: ExportMode): String = buildString {
