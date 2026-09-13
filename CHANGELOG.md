@@ -2,6 +2,31 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.8 - 2026-09-13
+
+### Readest direct export
+- Added a direct Readest library export that writes selected books into `Readest/Books` and merges `library.json` plus per-book `config.json`.
+- Readest book directories use Readest's own partialMD5 sampling scheme, which is intentionally separate from KOReader/KOSync partialMD5.
+- EPUB/PDF files, cover metadata, reading progress and safely mapped annotations are written without fabricating `nav.json`; Readest can rebuild that derived cache itself.
+- Existing `library.json` and per-book `config.json` are backed up once before Moon Exporter changes them.
+- Existing Readest book files are not duplicated when the same Readest book hash already exists.
+- Moon+ annotations that cannot be mapped safely remain preserved as `moon-export.mrexpt` instead of receiving invented CFIs.
+
+### Cryptic Moon+ filenames
+- Cryptic numeric/hash filenames are detected and shown explicitly in the UI.
+- For Readest direct export the user can choose to reconstruct and normalize output filenames.
+- Reconstruction prefers EPUB title/author/identifier metadata, then the title/author/ISBN already recovered from Moon+ database and backup metadata.
+- Only the new Readest copy receives the reconstructed filename. The Moon+ backup and original ebook are never renamed or modified.
+
+### Identity and progress safety
+- `metaHash` now follows Readest's identifier preference order (UUID, Calibre, ISBN) instead of treating ISBN as the only identifier source.
+- Existing Readest progress is preserved unless no target progress exists or Moon+ has a newer explicit timestamp.
+- Percentage fallback is stored without claiming an exact text position.
+
+### Tests
+- Added a synthetic regression test for Readest partialMD5 sampling.
+- Existing privacy, unit, lint, manifest and permission checks remain mandatory before APK delivery.
+
 ## 1.0.7 - 2026-09-13
 
 ### Network
