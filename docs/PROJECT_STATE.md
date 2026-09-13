@@ -18,15 +18,16 @@ WebDAV remains deferred until the local backup, Readest and KOSync paths are rel
 - Branch: `revision/1.0.14-refresh-session-sources`
 - PR: #29, open and not merged
 - Version: `1.0.14`, versionCode 16
-- Tested app-code head: `22f20e43701fccbc0c5c1e8ed64b5364a5d42a79`
-- Android CI run `34780217834`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload
-- CodeQL run `34780217703`: success
-- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325540078`
-- Artifact ZIP digest: `sha256:7ea0f7d2c13a94fd0645c6ee15e5475daddf1812539d0c882123949a855b48ce`
-- Verified APK SHA256: `2eb67f2842baeba96902d35680510f693828f4ba50154879e62772c4eb2e227c`
+- Tested app-code head: `c8dd5d8bc5d3317087bbd199677b44e4502e700c`
+- Android CI run `34781062706`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload
+- CodeQL run `34781062693`: success
+- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325086650`
+- Artifact ZIP digest: `sha256:e4c4698b65e7363ba9618d41edf72b6af962bf249624eb19ff8490773bb7f868`
+- Verified APK SHA256: `29a64d15e0e9e337274e62b211a655730cc52f36564e856c1aff7ac7d8f1f1df`
+- Later commits after the tested app-code head update documentation/changelog only and do not alter the APK.
 
 ## 1.0.14 stale transfer source recovery
-Real-device feedback from 1.0.13 reported `Keine Buchdatei für ... gespeichert` while the current analyzed book list already contained the book.
+Real-device feedback from 1.0.13 reported a missing stored book source while the current analyzed book list already contained the book.
 
 Root cause:
 - `Exporter` reused an unfinished transfer session for the same Readest target without refreshing its persisted BookItem payload.
@@ -41,6 +42,12 @@ Binding behavior from 1.0.14:
 - Legacy source-less sessions are left for a manual fresh retry instead of immediately failing again.
 - A pending session for a different target is still blocked to avoid cross-target confusion.
 - Regression tests cover same-target supersession, different-target blocking and auto-resume source requirements.
+
+## 1.0.14 export status UI
+- Step 4 no longer reports success just because the Activity-side coroutine stopped.
+- While running, the verbose sub-step explanation remains visible.
+- On failure/interruption it shows `Export unterbrochen oder fehlgeschlagen.` or `Export unterbrochen.` as appropriate.
+- `Export erfolgreich beendet.` is shown only after a completed export with full progress.
 
 ## 1.0.13 deterministic Readest validation retained
 - Before writing a book, `ExportService` calculates the exact Readest partialMD5 from the persisted source ebook.
