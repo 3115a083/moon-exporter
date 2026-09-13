@@ -18,6 +18,40 @@ internal object ReadestTargetAudit {
         return added.singleOrNull()
     }
 
+    /**
+     * Finds the exact folder touched by the single-book direct exporter even when that
+     * Readest hash directory already existed before this attempt. The exporter always
+     * refreshes config.updatedAt and writes config.bookHash, so this is stronger than
+     * title/ISBN guessing and does not require re-reading the source ebook.
+     */
+    fun findRecentlyCommittedHash(context: Context, targetTree: Uri, startedAtMs: Long): String? {
+        val root = booksRoot(context, targetTree) ?: return null
+        repairLibraryIfNeeded(context, root)
+        val libraryText = root.findFile("library.json")?.let { readText(context, it, 16 * 1024 * 1024) } ?: return null
+        val library = runCatching { JSONArray(libraryText) }.getOrNull() ?: return null
+        val libraryHashes = buildSet {
+            for (i in 0 until library.length()) {
+                library.optJSONObject(i)?.optString("hash")
+                    ?.takeIf { it.matches(Regex("^[0-9a-fA-F]{32}$")) }
+                    ?.lowercase(Locale.ROOT)
+                    ?.let(::add)
+            }
+        }
+        val candidates = mutableListOf<String>()
+        for (dir in root.listFiles()) {
+            val hash = dir.name?.takeIf { dir.isDirectory && it.matches(Regex("^[0-9a-fA-F]{32}$")) }?.lowercase(Locale.ROOT) ?: continue
+            if (hash !in libraryHashes) continue
+            val config = dir.findFile("config.json") ?: continue
+            val text = readText(context, config, 8 * 1024 * 1024) ?: continue
+            val json = runCatching { JSONObject(text) }.getOrNull() ?: continue
+            if (!json.optString("bookHash").equals(hash, true)) continue
+            val updatedAt = json.optLong("updatedAt", 0L)
+            // Allow small clock/write ordering tolerance but never accept an old untouched folder.
+            if (updatedAt >= startedAtMs - 2_000L) candidates += hash
+        }
+        return candidates.distinct().singleOrNull()
+    }
+
     fun findLikelyHash(context: Context, targetTree: Uri, book: BookItem): String? {
         val root = booksRoot(context, targetTree) ?: return null
         repairLibraryIfNeeded(context, root)
@@ -47,20 +81,20 @@ internal object ReadestTargetAudit {
     fun validateKnownBook(context: Context, targetTree: Uri, targetHash: String, expectedSize: Long?): Validation {
         val root = booksRoot(context, targetTree) ?: return Validation(false, "Readest/Books fehlt")
         repairLibraryIfNeeded(context, root)
-        val dir = root.findFile(targetHash)?.takeIf { it.isDirectory } ?: return Validation(false, "Buchordner fehlt")
+        val dir = root.findFile(targetHash)?.takeIf { it.isDirectory } ?: return Validation(false, "Buchordner fehlt: $targetHash")
         cleanupPartFiles(dir)
         val book = dir.listFiles().firstOrNull { it.isFile && it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in setOf("epub", "pdf") }
             ?: return Validation(false, "Buchdatei fehlt")
         if (expectedSize != null && expectedSize > 0L && book.length() != expectedSize) {
             runCatching { book.delete() }
-            return Validation(false, "Unvollständige Buchdatei entfernt")
+            return Validation(false, "Buchdatei war unvollständig und wurde zur Reparatur entfernt")
         }
         val targetBookHash = runCatching {
             context.contentResolver.openInputStream(book.uri)?.buffered()?.use(ReadestDirectExporter::readestPartialMd5)
         }.getOrNull()
         if (targetBookHash == null || !targetBookHash.equals(targetHash, true)) {
             runCatching { book.delete() }
-            return Validation(false, "Unvollständige oder falsche Buchdatei entfernt")
+            return Validation(false, "Buchdatei hatte nicht den erwarteten Readest-Hash und wurde entfernt")
         }
 
         val config = dir.findFile("config.json") ?: return Validation(false, "config.json fehlt")
@@ -74,13 +108,16 @@ internal object ReadestTargetAudit {
             if (configText == null || runCatching { JSONObject(configText) }.isFailure) return Validation(false, "config.json ungültig")
             return Validation(false, if (repairedFromBackup) "Unterbrochene config.json aus Sicherung repariert" else "Unterbrochene erste config.json zurückgesetzt")
         }
+        val configJson = runCatching { JSONObject(configText) }.getOrNull() ?: return Validation(false, "config.json ungültig")
+        val configHash = configJson.optString("bookHash")
+        if (configHash.isNotBlank() && !configHash.equals(targetHash, true)) return Validation(false, "config.json gehört zu einem anderen Readest-Buchhash")
 
         val library = root.findFile("library.json") ?: return Validation(false, "library.json fehlt")
         val libraryText = readText(context, library, 16 * 1024 * 1024) ?: return Validation(false, "library.json nicht lesbar")
         val arr = runCatching { JSONArray(libraryText) }.getOrNull() ?: return Validation(false, "library.json ungültig")
         var present = false
         for (i in 0 until arr.length()) if (arr.optJSONObject(i)?.optString("hash")?.equals(targetHash, true) == true) { present = true; break }
-        if (!present) return Validation(false, "Bibliothekseintrag fehlt")
+        if (!present) return Validation(false, "Bibliothekseintrag für $targetHash fehlt")
         return Validation(true)
     }
 
