@@ -113,7 +113,7 @@ class ExportService : Service() {
                         throw t
                     }
                 }
-                ReadestTargetAudit.cleanupTargetParts(this@ExportService, session.targetUri)
+                ReadestTargetAudit.cleanupRecoveryArtifacts(this@ExportService, session.targetUri)
                 store.setSessionStatus(sessionId, "DONE")
                 val text = tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified.")
                 ExportState.update(ExportSnapshot(false, sessionId, text, 1f, items.size, items.size))
