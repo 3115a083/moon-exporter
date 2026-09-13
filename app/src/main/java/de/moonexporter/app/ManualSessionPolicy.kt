@@ -8,4 +8,6 @@ internal object ManualSessionPolicy {
         pendingTarget == selectedTarget -> ManualSessionDecision.SUPERSEDE_AND_CREATE
         else -> ManualSessionDecision.BLOCK_OTHER_TARGET
     }
+
+    fun canAutoResume(sourceReady: List<Boolean>): Boolean = sourceReady.isNotEmpty() && sourceReady.all { it }
 }
