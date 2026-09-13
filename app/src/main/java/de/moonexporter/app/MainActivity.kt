@@ -52,6 +52,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -103,6 +104,7 @@ private fun MoonExporterApp(context: Context) {
     var password by remember { mutableStateOf("") }
     var connectionFeedback by remember { mutableStateOf<String?>(null) }
     var pendingBookKey by remember { mutableStateOf<String?>(null) }
+    var pendingExportKeys by rememberSaveable { mutableStateOf<ArrayList<String>?>(null) }
     var lastSession by remember { mutableStateOf(0L) }
     var lastRevision by remember { mutableStateOf(-1) }
     val scope = rememberCoroutineScope()
@@ -113,7 +115,9 @@ private fun MoonExporterApp(context: Context) {
         books = newBooks.sortedBy { sortTitle(it.title) }
         if (resetSelection) {
             selected.clear()
-            books.forEach { selected[it.key] = true }
+            books.forEach { book ->
+                selected[book.key] = book.hasBookFile || book.position != null || book.hasAnnotations
+            }
         } else books.forEach { if (it.key !in selected) selected[it.key] = true }
     }
 
@@ -201,9 +205,20 @@ private fun MoonExporterApp(context: Context) {
         }
     }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        if (uri == null) {
+            pendingExportKeys = null
+            return@rememberLauncherForActivityResult
+        }
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-        val chosen = books.filter { selected[it.key] == true }
+        val chosenKeys = pendingExportKeys?.toSet().orEmpty()
+        pendingExportKeys = null
+        val sourceBooks = books.ifEmpty { analysis.books }
+        val chosen = sourceBooks.filter { it.key in chosenKeys }
+        if (chosen.isEmpty()) {
+            exportFailed = true
+            status = tr("Keine ausgewählten Bücher für den Export gefunden.", "No selected books were found for export.")
+            return@rememberLauncherForActivityResult
+        }
         exportProgress = 0f
         exportFailed = false
         launchWork(tr("Export abgebrochen", "Export cancelled")) {
@@ -304,7 +319,10 @@ private fun MoonExporterApp(context: Context) {
                                     { normalizeReadestNames = it },
                                     selectedCryptic,
                                     enabled = !busy && selectedCount > 0,
-                                ) { exportPicker.launch(null) }
+                                ) {
+                                    pendingExportKeys = ArrayList(books.filter { selected[it.key] == true }.map { it.key })
+                                    exportPicker.launch(null)
+                                }
                                 else -> ServerTarget(
                                     target, serverUrl, { serverUrl = it; connectionFeedback = null }, username, { username = it; connectionFeedback = null }, password, { password = it; connectionFeedback = null }, busy, selectedCount > 0, connectionFeedback,
                                     onTest = {
