@@ -124,6 +124,7 @@ class ExportService : Service() {
                             knownHash = ReadestTargetAudit.discoverSingleNewHash(before, this@ExportService, session.targetUri)
                                 ?: knownHash
                                 ?: ReadestTargetAudit.findLikelyHash(this@ExportService, session.targetUri, item.book)
+                                ?: ReadestIdentity.expectedHash(this@ExportService, item.book)
                             val validation = knownHash?.let { ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, it, item.book.epub?.size) }
                             if (knownHash != null && validation?.complete == true) {
                                 store.setItemState(item.id, "DONE", knownHash)
@@ -139,6 +140,7 @@ class ExportService : Service() {
                             knownHash = ReadestTargetAudit.discoverSingleNewHash(before, this@ExportService, session.targetUri)
                                 ?: knownHash
                                 ?: ReadestTargetAudit.findLikelyHash(this@ExportService, session.targetUri, item.book)
+                                ?: runCatching { ReadestIdentity.expectedHash(this@ExportService, item.book) }.getOrNull()
                             lastFailure = t
                         }
                         store.setItemState(item.id, "INTERRUPTED", knownHash, lastFailure?.message)
