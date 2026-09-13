@@ -137,17 +137,22 @@ internal class TransferStore(context: Context) : SQLiteOpenHelper(context, "moon
         val fp = sourceFingerprint(context, sourceUri) ?: return null
         readableDatabase.rawQuery("SELECT source_fingerprint,books_json FROM analysis_cache WHERE slot=1 AND source_uri=?", arrayOf(sourceUri.toString())).use { c ->
             if (!c.moveToFirst() || c.getString(0) != fp) return null
-            val arr = runCatching { JSONArray(c.getString(1)) }.getOrNull() ?: return null
-            return buildList { for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { runCatching { bookFromJson(it) }.getOrNull()?.let(::add) } }
+            return decodeBooks(c.getString(1))
         }
     }
 
-    fun loadLatestAnalysis(): List<BookItem>? {
-        readableDatabase.rawQuery("SELECT books_json FROM analysis_cache WHERE slot=1", null).use { c ->
+    fun loadLatestAnalysis(context: Context): List<BookItem>? {
+        readableDatabase.rawQuery("SELECT source_uri,source_fingerprint,books_json FROM analysis_cache WHERE slot=1", null).use { c ->
             if (!c.moveToFirst()) return null
-            val arr = runCatching { JSONArray(c.getString(0)) }.getOrNull() ?: return null
-            return buildList { for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { runCatching { bookFromJson(it) }.getOrNull()?.let(::add) } }
+            val uri = runCatching { Uri.parse(c.getString(0)) }.getOrNull() ?: return null
+            if (sourceFingerprint(context, uri) != c.getString(1)) return null
+            return decodeBooks(c.getString(2))
         }
+    }
+
+    private fun decodeBooks(json: String): List<BookItem>? {
+        val arr = runCatching { JSONArray(json) }.getOrNull() ?: return null
+        return buildList { for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { runCatching { bookFromJson(it) }.getOrNull()?.let(::add) } }
     }
 
     companion object {
