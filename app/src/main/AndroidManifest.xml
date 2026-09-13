@@ -28,5 +28,10 @@
             android:name=".AnalysisService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".ExportService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
