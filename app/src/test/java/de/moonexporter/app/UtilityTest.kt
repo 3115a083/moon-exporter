@@ -1,6 +1,7 @@
 package de.moonexporter.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -14,14 +15,58 @@ class UtilityTest {
         assertEquals(11.1, p.percent ?: 0.0, 0.0001)
     }
 
+    @Test fun `parses positions10 position without timestamp`() {
+        val p = ProgressRecovery.parseMoonPosition("21@0#4826:11.1%")!!
+        assertEquals(null, p.timestampMs)
+        assertEquals(21, p.chapterOrPage)
+        assertEquals(0, p.section)
+        assertEquals(4826L, p.offset)
+        assertEquals(11.1, p.percent ?: 0.0, 0.0001)
+    }
+
+    @Test fun `parses positions10 shared preferences xml`() {
+        val xml = """
+            <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+            <map>
+              <string name="/sdcard/Books/A &amp; B.epub">14@0#2952:23.0%</string>
+              <string name="/sdcard/Books/Paper.pdf">42:56.5%</string>
+            </map>
+        """.trimIndent()
+        val parsed = ProgressRecovery.parsePositions10Xml(xml)
+        assertEquals(2, parsed.size)
+        assertEquals(23.0, parsed["/sdcard/Books/A & B.epub"]?.percent ?: 0.0, 0.0001)
+        assertEquals(14, parsed["/sdcard/Books/A & B.epub"]?.chapterOrPage)
+        assertEquals(42, parsed["/sdcard/Books/Paper.pdf"]?.chapterOrPage)
+        assertEquals(56.5, parsed["/sdcard/Books/Paper.pdf"]?.percent ?: 0.0, 0.0001)
+    }
+
+    @Test fun `rejects unsafe positions10 xml declarations`() {
+        val xml = "<!DOCTYPE map [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><map><string name='x'>&xxe;</string></map>"
+        assertTrue(ProgressRecovery.parsePositions10Xml(xml).isEmpty())
+    }
+
     @Test fun `normalizes CWA base without duplicate kosync`() {
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1/kosync/", ServerType.CALIBRE_WEB_AUTOMATED))
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1", ServerType.CALIBRE_WEB_AUTOMATED))
     }
 
+    @Test fun `normalizes BookLore base without duplicate koreader path`() {
+        assertEquals("https://books.example.test", KoSyncClient.normalizeBaseUrl("https://books.example.test/api/koreader/", ServerType.BOOKLORE))
+        val config = SyncConfig(ServerType.BOOKLORE, "https://books.example.test", "user", "secret")
+        assertEquals("https://books.example.test/api/koreader", KoSyncClient.endpointRoot(config))
+    }
+
+    @Test fun `allows http for local network only`() {
+        assertEquals("http://192.168.1.50", KoSyncClient.normalizeBaseUrl("http://192.168.1.50", ServerType.STANDARD_KOSYNC))
+        assertEquals("http://booklore.local", KoSyncClient.normalizeBaseUrl("http://booklore.local", ServerType.STANDARD_KOSYNC))
+        assertTrue(KoSyncClient.isLocalNetworkHost("10.0.0.2"))
+        assertTrue(KoSyncClient.isLocalNetworkHost("172.16.2.5"))
+        assertFalse(KoSyncClient.isLocalNetworkHost("8.8.8.8"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
-    fun `rejects cleartext server url`() {
-        KoSyncClient.normalizeBaseUrl("http://192.0.2.1", ServerType.STANDARD_KOSYNC)
+    fun `rejects public cleartext server url`() {
+        KoSyncClient.normalizeBaseUrl("http://example.com", ServerType.STANDARD_KOSYNC)
     }
 
     @Test fun `partial md5 uses KOReader sampling offsets`() {
@@ -29,12 +74,31 @@ class UtilityTest {
         val hash = partialMd5(ByteArrayInputStream(bytes))
         assertEquals(32, hash.length)
         assertTrue(hash.matches(Regex("[0-9a-f]{32}")))
-        assertEquals(0L, PARTIAL_MD5_OFFSETS.first())
-        assertEquals(1L shl 30, PARTIAL_MD5_OFFSETS.last())
+        assertEquals(1L shl 9, PARTIAL_MD5_OFFSETS.first())
+        assertEquals(1L shl 31, PARTIAL_MD5_OFFSETS.last())
     }
 
     @Test fun `article sorting ignores common prefixes`() {
         assertEquals(sortTitle("The Example Book"), sortTitle("Example Book"))
         assertEquals(sortTitle("Der Beispielroman"), sortTitle("Beispielroman"))
+    }
+
+    @Test fun `mrpro tag mapping accepts one based and zero based candidates`() {
+        val names = listOf("mrbooks.db", "positions10.xml", "Synthetic Book.epub")
+        assertEquals(listOf("mrbooks.db", "positions10.xml", "1.tag"), MoonImporter.mrproLogicalCandidates("1.tag", names))
+        assertEquals(listOf("mrbooks.db", "0.tag"), MoonImporter.mrproLogicalCandidates("0.tag", names))
+    }
+
+    @Test fun `detects sqlite database signature in numbered tag`() {
+        val valid = "SQLite format 3\u0000synthetic".toByteArray(Charsets.US_ASCII)
+        val invalid = "not a sqlite file".toByteArray(Charsets.US_ASCII)
+        assertTrue(MoonImporter.looksLikeSqliteHeader(valid))
+        assertFalse(MoonImporter.looksLikeSqliteHeader(invalid))
+    }
+
+    @Test fun `recognizes opaque numeric and hash book names`() {
+        assertTrue(ProgressRecovery.looksOpaque("123456789.epub"))
+        assertTrue(ProgressRecovery.looksOpaque("0123456789abcdef0123456789abcdef.epub"))
+        assertFalse(ProgressRecovery.looksOpaque("A Real Book Title.epub"))
     }
 }
