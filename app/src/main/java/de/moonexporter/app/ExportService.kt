@@ -73,11 +73,33 @@ class ExportService : Service() {
         startForeground(NOTIFICATION_ID, notification(tr("Readest-Export wird vorbereitet…", "Preparing Readest export…"), 0, items.size, true))
         exportJob = scope.launch {
             var done = 0
+            var skipped = 0
             ExportState.update(ExportSnapshot(true, sessionId, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), 0f, 0, items.size))
             try {
                 ReadestTargetAudit.cleanupTargetParts(this@ExportService, session.targetUri)
                 for (item in items) {
                     coroutineContext.ensureActive()
+
+                    if (!item.book.hasBookFile) {
+                        val hasUserData = item.book.position != null || item.book.hasAnnotations
+                        val reason = if (hasUserData) {
+                            tr(
+                                "Übersprungen, weil keine Buchdatei zugeordnet ist: ${item.book.title}",
+                                "Skipped because no book file is assigned: ${item.book.title}",
+                            )
+                        } else {
+                            tr(
+                                "Ohne Buchdatei und ohne übertragbare Daten übersprungen: ${item.book.title}",
+                                "Skipped because there is no book file or transferable data: ${item.book.title}",
+                            )
+                        }
+                        store.setItemState(item.id, "SKIPPED_NO_SOURCE", error = reason)
+                        skipped++
+                        done++
+                        publish(sessionId, done, items.size, reason)
+                        continue
+                    }
+
                     var knownHash = store.completedHash(session.targetUri, item) ?: item.targetHash
                     if (!knownHash.isNullOrBlank()) {
                         val validation = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, knownHash, item.book.epub?.size)
@@ -151,7 +173,14 @@ class ExportService : Service() {
                 }
                 ReadestTargetAudit.cleanupRecoveryArtifacts(this@ExportService, session.targetUri)
                 store.setSessionStatus(sessionId, "DONE")
-                val text = tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified.")
+                val text = if (skipped > 0) {
+                    tr(
+                        "Readest-Export abgeschlossen und geprüft. $skipped Buch/Bücher ohne verwendbare Buchdatei wurden übersprungen.",
+                        "Readest export completed and verified. $skipped book(s) without a usable book file were skipped.",
+                    )
+                } else {
+                    tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified.")
+                }
                 ExportState.update(ExportSnapshot(false, sessionId, text, 1f, items.size, items.size))
                 notifyProgress(text, items.size, items.size, false)
             } catch (_: CancellationException) {
