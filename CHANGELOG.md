@@ -2,6 +2,25 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase. Older entries are intentionally concise; `docs/PROJECT_STATE.md` and the private handoff contain the current binding implementation rules.
 
+## 1.0.13 - 2026-09-13
+
+### Deterministic Readest validation
+- Fixed the repeated real-device validation failure that still occurred after 1.0.12.
+- The expected Readest partialMD5 is now calculated before the book write begins and stored in the book checkpoint immediately.
+- The whole book transaction uses that exact expected hash. The service no longer needs to rediscover the just-exported target folder after a successful write.
+- Post-export validation checks exactly that hash directory and still requires the ebook identity, valid `config.json`, valid `library.json` and matching library row.
+- If the source hash cannot be calculated before export, the operation stops with a specific source-identity error instead of writing first and returning an ambiguous target-validation error.
+- If strict target validation fails, the UI now reports the actual failed check and book title, such as missing library row, invalid config or ebook hash mismatch.
+- Existing foreground-service, checkpoint, retry and orphan-repair behavior from 1.0.11 remains enabled.
+
+### Verification
+- Tested app-code head: `6918cfdc6483069b5742e0aa28cf6d8fe413af25`.
+- Android CI run `34775655809`: success, including privacy scan, unit tests, lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34775655830`: success.
+- Debug artifact: `MoonExporter-1.0.13-debug`, artifact ID `10323835806`.
+- Artifact ZIP digest: `sha256:a51d0ab9b32034224a92915f62724be6adeb1daf7ac1df24a2d538260e7c0f5b`.
+- APK SHA256: `6a548c315d87a6b355c902bed1768c03f99ba7a5fcf1826f2d6db514fd855306`.
+
 ## 1.0.12 - 2026-09-13
 
 ### Readest target validation
