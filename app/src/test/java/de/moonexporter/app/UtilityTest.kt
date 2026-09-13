@@ -15,6 +15,36 @@ class UtilityTest {
         assertEquals(11.1, p.percent ?: 0.0, 0.0001)
     }
 
+    @Test fun `parses positions10 position without timestamp`() {
+        val p = ProgressRecovery.parseMoonPosition("21@0#4826:11.1%")!!
+        assertEquals(null, p.timestampMs)
+        assertEquals(21, p.chapterOrPage)
+        assertEquals(0, p.section)
+        assertEquals(4826L, p.offset)
+        assertEquals(11.1, p.percent ?: 0.0, 0.0001)
+    }
+
+    @Test fun `parses positions10 shared preferences xml`() {
+        val xml = """
+            <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+            <map>
+              <string name="/sdcard/Books/A &amp; B.epub">14@0#2952:23.0%</string>
+              <string name="/sdcard/Books/Paper.pdf">42:56.5%</string>
+            </map>
+        """.trimIndent()
+        val parsed = ProgressRecovery.parsePositions10Xml(xml)
+        assertEquals(2, parsed.size)
+        assertEquals(23.0, parsed["/sdcard/Books/A & B.epub"]?.percent ?: 0.0, 0.0001)
+        assertEquals(14, parsed["/sdcard/Books/A & B.epub"]?.chapterOrPage)
+        assertEquals(42, parsed["/sdcard/Books/Paper.pdf"]?.chapterOrPage)
+        assertEquals(56.5, parsed["/sdcard/Books/Paper.pdf"]?.percent ?: 0.0, 0.0001)
+    }
+
+    @Test fun `rejects unsafe positions10 xml declarations`() {
+        val xml = "<!DOCTYPE map [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><map><string name='x'>&xxe;</string></map>"
+        assertTrue(ProgressRecovery.parsePositions10Xml(xml).isEmpty())
+    }
+
     @Test fun `normalizes CWA base without duplicate kosync`() {
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1/kosync/", ServerType.CALIBRE_WEB_AUTOMATED))
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1", ServerType.CALIBRE_WEB_AUTOMATED))
