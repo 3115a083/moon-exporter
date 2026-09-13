@@ -19,6 +19,13 @@ internal object Exporter {
         includeDiagnostics: Boolean,
         onProgress: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
+        if (mode == ExportMode.FULL) {
+            val result = ReadestDirectExporter.export(context, targetTree, books, onProgress)
+            val warningSuffix = if (result.skipped > 0) tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped") else ""
+            onProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"))
+            return@withContext
+        }
+
         val root = DocumentFile.fromTreeUri(context, targetTree) ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
         val created = mutableListOf<DocumentFile>()
         try {
@@ -29,7 +36,6 @@ internal object Exporter {
                     val file = createUnique(root, "${safeName(book.title)}.mrexpt", "text/plain").also(created::add)
                     writeText(context, file, mrexptFor(book))
                 }
-                if (mode == ExportMode.FULL) exportBook(context, root, book, created)
             }
             if (includeDiagnostics) {
                 val diagnostic = createUnique(root, "moon-exporter-diagnostic.json", "application/json").also(created::add)
