@@ -15,6 +15,18 @@ class UtilityTest {
         assertEquals(11.1, p.percent ?: 0.0, 0.0001)
     }
 
+    @Test fun `parses positions10 android shared preferences`() {
+        val xml = """<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+            <map>
+              <string name="?/sdcard/Books/Synthetic Book.epub">1700000000000*21@0#4826:11.1%</string>
+              <boolean name="ignored" value="true" />
+            </map>""".trimIndent().toByteArray()
+        val out = linkedMapOf<String, MoonPosition>()
+        ProgressRecovery.parsePositionsPreferences(xml, out)
+        assertEquals(11.1, out["synthetic book.epub"]?.percent ?: 0.0, 0.0001)
+        assertEquals(21, out["synthetic book"]?.chapterOrPage)
+    }
+
     @Test fun `normalizes CWA base without duplicate kosync`() {
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1/kosync/", ServerType.CALIBRE_WEB_AUTOMATED))
         assertEquals("https://192.0.2.1", KoSyncClient.normalizeBaseUrl("https://192.0.2.1", ServerType.CALIBRE_WEB_AUTOMATED))
