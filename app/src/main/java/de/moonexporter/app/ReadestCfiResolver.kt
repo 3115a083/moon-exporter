@@ -2,7 +2,6 @@ package de.moonexporter.app
 
 import org.w3c.dom.Element
 import org.w3c.dom.Node
-import org.w3c.dom.Text
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.Locale
@@ -10,20 +9,12 @@ import java.util.zip.ZipFile
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 
-/**
- * Resolves Moon+ annotation text against the actual EPUB XHTML and emits a
- * Foliate/Readest-compatible EPUB CFI range. No range is invented when the
- * highlighted text cannot be found in the book.
- */
+/** Resolves Moon+ highlight text to a real Foliate/Readest EPUB CFI range. */
 internal class ReadestCfiResolver(
     private val epubFile: File,
     private val spinePaths: List<String>,
-) {
-    internal data class ResolvedRange(
-        val cfi: String,
-        val spineIndex: Int,
-        val matchedText: String,
-    )
+) : AutoCloseable {
+    internal data class ResolvedRange(val cfi: String, val spineIndex: Int, val matchedText: String)
 
     private data class CharRef(val node: Node, val offset: Int)
     private data class IndexedText(val text: String, val refs: List<CharRef>)
@@ -32,11 +23,11 @@ internal class ReadestCfiResolver(
 
     private val documents = mutableMapOf<Int, org.w3c.dom.Document?>()
     private val indexes = mutableMapOf<Int, IndexedText?>()
+    private var openedZip: ZipFile? = null
 
     fun resolve(text: String, preferredSpine: Int?, preferredPosition: Long?): ResolvedRange? {
         val needle = normalizeText(text)
         if (needle.isBlank()) return null
-
         val candidates = buildList {
             if (preferredSpine != null && preferredSpine in spinePaths.indices) add(preferredSpine)
             for (i in spinePaths.indices) if (i != preferredSpine) add(i)
@@ -54,10 +45,17 @@ internal class ReadestCfiResolver(
             val endRef = indexed.refs[endExclusive - 1]
             val startParts = nodeToParts(startRef.node, startRef.offset) ?: continue
             val endParts = nodeToParts(endRef.node, endRef.offset + 1) ?: continue
-            val range = buildRangeCfi(spineIndex, startParts, endParts) ?: continue
-            return ResolvedRange(range, spineIndex, needle)
+            val cfi = buildRangeCfi(spineIndex, startParts, endParts) ?: continue
+            return ResolvedRange(cfi, spineIndex, needle)
         }
         return null
+    }
+
+    override fun close() {
+        runCatching { openedZip?.close() }
+        openedZip = null
+        documents.clear()
+        indexes.clear()
     }
 
     private fun buildTextIndex(spineIndex: Int): IndexedText? {
@@ -73,8 +71,7 @@ internal class ReadestCfiResolver(
                 if (name == "script" || name == "style") return
             }
             if (node.nodeType == Node.TEXT_NODE || node.nodeType == Node.CDATA_SECTION_NODE) {
-                val value = node.nodeValue.orEmpty()
-                value.forEachIndexed { offset, ch ->
+                node.nodeValue.orEmpty().forEachIndexed { offset, ch ->
                     if (ch.isWhitespace()) {
                         if (out.isNotEmpty()) pendingSpace = CharRef(node, offset)
                     } else {
@@ -104,15 +101,14 @@ internal class ReadestCfiResolver(
     private fun loadDocument(spineIndex: Int): org.w3c.dom.Document? {
         val wanted = spinePaths.getOrNull(spineIndex)?.replace('\\', '/')?.trimStart('/') ?: return null
         val bytes = runCatching {
-            ZipFile(epubFile).use { zip ->
-                val entry = zip.entries().asSequence().firstOrNull {
-                    !it.isDirectory && it.name.replace('\\', '/').trimStart('/').equals(wanted, ignoreCase = true)
-                } ?: return@use null
-                if (entry.size > MAX_XHTML_BYTES) return@use null
-                zip.getInputStream(entry).use { input ->
-                    val data = input.readBytes(MAX_XHTML_BYTES + 1)
-                    data.takeIf { it.size <= MAX_XHTML_BYTES }
-                }
+            val zip = openedZip ?: ZipFile(epubFile).also { openedZip = it }
+            val entry = zip.entries().asSequence().firstOrNull {
+                !it.isDirectory && it.name.replace('\\', '/').trimStart('/').equals(wanted, ignoreCase = true)
+            } ?: return@runCatching null
+            if (entry.size > MAX_XHTML_BYTES) return@runCatching null
+            zip.getInputStream(entry).use { input ->
+                val data = input.readLimited(MAX_XHTML_BYTES + 1)
+                data.takeIf { it.size <= MAX_XHTML_BYTES }
             }
         }.getOrNull() ?: return null
 
@@ -178,19 +174,16 @@ internal class ReadestCfiResolver(
         } else listOf(current)
     }
 
-    /** Port of foliate-js epubcfi.js indexChildNodes() semantics. */
+    /** Port of Readest's foliate-js epubcfi.js indexChildNodes() semantics. */
     private fun indexChildNodes(parent: Node): MutableList<Any?> {
         val raw = mutableListOf<Node>()
         val children = parent.childNodes
         for (i in 0 until children.length) {
             val child = children.item(i)
-            if (child.nodeType == Node.ELEMENT_NODE || child.nodeType == Node.TEXT_NODE || child.nodeType == Node.CDATA_SECTION_NODE) {
-                val element = child as? Element
-                if (element?.hasAttribute("cfi-inert") == true) continue
-                if (element?.hasAttribute("cfi-skip") == true) {
-                    raw += flattenSkip(child)
-                } else raw += child
-            }
+            if (child.nodeType != Node.ELEMENT_NODE && child.nodeType != Node.TEXT_NODE && child.nodeType != Node.CDATA_SECTION_NODE) continue
+            val element = child as? Element
+            if (element?.hasAttribute("cfi-inert") == true) continue
+            if (element?.hasAttribute("cfi-skip") == true) raw += flattenSkip(child) else raw += child
         }
 
         val grouped = mutableListOf<Any?>()
@@ -199,7 +192,7 @@ internal class ReadestCfiResolver(
             if (grouped.isEmpty()) grouped += node
             else if (isText(node)) {
                 when (last) {
-                    is MutableList<*> -> (last as MutableList<Node>).add(node)
+                    is MutableList<*> -> @Suppress("UNCHECKED_CAST") (last as MutableList<Node>).add(node)
                     is Node -> if (isText(last)) grouped[grouped.lastIndex] = mutableListOf(last, node) else grouped += node
                     else -> grouped += node
                 }
@@ -221,9 +214,9 @@ internal class ReadestCfiResolver(
         for (i in 0 until children.length) {
             val child = children.item(i)
             if (child.nodeType != Node.ELEMENT_NODE && child.nodeType != Node.TEXT_NODE && child.nodeType != Node.CDATA_SECTION_NODE) continue
-            val el = child as? Element
-            if (el?.hasAttribute("cfi-inert") == true) continue
-            if (el?.hasAttribute("cfi-skip") == true) out += flattenSkip(child) else out += child
+            val element = child as? Element
+            if (element?.hasAttribute("cfi-inert") == true) continue
+            if (element?.hasAttribute("cfi-skip") == true) out += flattenSkip(child) else out += child
         }
         return out
     }
@@ -244,8 +237,7 @@ internal class ReadestCfiResolver(
         val endTail = end.drop(common)
         if (startTail.isEmpty() || endTail.isEmpty()) return null
         val inner = renderParts(parent) + "," + renderParts(startTail) + "," + renderParts(endTail)
-        val section = 2 * (spineIndex + 1)
-        return "epubcfi(/6/$section!$inner)"
+        return "epubcfi(/6/${2 * (spineIndex + 1)}!$inner)"
     }
 
     private fun renderParts(parts: List<Part>): String = buildString {
@@ -257,7 +249,6 @@ internal class ReadestCfiResolver(
     }
 
     private fun escapeCfi(value: String): String = value.replace(Regex("([\\^\\[\\](),;=])"), "^$1")
-
     private fun normalizeText(value: String): String = value.replace(Regex("\\s+"), " ").trim()
 
     private fun allMatches(haystack: String, needle: String): List<Int> {
@@ -273,7 +264,7 @@ internal class ReadestCfiResolver(
         return out
     }
 
-    private fun java.io.InputStream.readBytes(maxBytes: Int): ByteArray {
+    private fun java.io.InputStream.readLimited(maxBytes: Int): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         val buffer = ByteArray(16 * 1024)
         var total = 0
