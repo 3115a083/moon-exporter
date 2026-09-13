@@ -1,13 +1,14 @@
 package de.moonexporter.app
 
-import org.w3c.dom.Element
-import org.w3c.dom.Node
-import java.io.ByteArrayInputStream
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
+import org.jsoup.parser.Parser
 import java.io.File
 import java.util.Locale
 import java.util.zip.ZipFile
-import javax.xml.XMLConstants
-import javax.xml.parsers.DocumentBuilderFactory
 
 /** Resolves Moon+ highlight text to a real Foliate/Readest EPUB CFI range. */
 internal class ReadestCfiResolver(
@@ -21,7 +22,7 @@ internal class ReadestCfiResolver(
     private data class Part(val index: Int, val id: String? = null, val offset: Int? = null)
     private enum class Marker { BEFORE, FIRST, LAST, AFTER }
 
-    private val documents = mutableMapOf<Int, org.w3c.dom.Document?>()
+    private val documents = mutableMapOf<Int, Document?>()
     private val indexes = mutableMapOf<Int, IndexedText?>()
     private var openedZip: ZipFile? = null
 
@@ -43,8 +44,10 @@ internal class ReadestCfiResolver(
             if (start !in indexed.refs.indices || endExclusive - 1 !in indexed.refs.indices) continue
             val startRef = indexed.refs[start]
             val endRef = indexed.refs[endExclusive - 1]
-            val startParts = nodeToParts(startRef.node, startRef.offset) ?: continue
-            val endParts = nodeToParts(endRef.node, endRef.offset + 1) ?: continue
+            val doc = documents[spineIndex] ?: continue
+            val root = documentElement(doc) ?: continue
+            val startParts = nodeToParts(startRef.node, startRef.offset, root) ?: continue
+            val endParts = nodeToParts(endRef.node, endRef.offset + 1, root) ?: continue
             val cfi = buildRangeCfi(spineIndex, startParts, endParts) ?: continue
             return ResolvedRange(cfi, spineIndex, needle)
         }
@@ -60,34 +63,38 @@ internal class ReadestCfiResolver(
 
     private fun buildTextIndex(spineIndex: Int): IndexedText? {
         val doc = documents.getOrPut(spineIndex) { loadDocument(spineIndex) } ?: return null
-        val root = findBody(doc.documentElement) ?: doc.documentElement ?: return null
+        val root = doc.selectFirst("body") ?: documentElement(doc) ?: return null
         val out = StringBuilder()
         val refs = ArrayList<CharRef>()
         var pendingSpace: CharRef? = null
 
+        fun appendText(node: TextNode) {
+            node.wholeText.forEachIndexed { offset, raw ->
+                val ch = canonicalChar(raw) ?: return@forEachIndexed
+                if (ch.isWhitespace()) {
+                    if (out.isNotEmpty()) pendingSpace = CharRef(node, offset)
+                } else {
+                    if (pendingSpace != null && out.isNotEmpty() && out.last() != ' ') {
+                        out.append(' ')
+                        refs.add(pendingSpace!!)
+                    }
+                    pendingSpace = null
+                    out.append(ch)
+                    refs.add(CharRef(node, offset))
+                }
+            }
+        }
+
         fun walk(node: Node) {
-            if (node.nodeType == Node.ELEMENT_NODE) {
-                val name = (node.localName ?: node.nodeName).substringAfter(':').lowercase(Locale.ROOT)
+            if (node is Element) {
+                val name = node.tagName().substringAfter(':').lowercase(Locale.ROOT)
                 if (name == "script" || name == "style") return
             }
-            if (node.nodeType == Node.TEXT_NODE || node.nodeType == Node.CDATA_SECTION_NODE) {
-                node.nodeValue.orEmpty().forEachIndexed { offset, ch ->
-                    if (ch.isWhitespace()) {
-                        if (out.isNotEmpty()) pendingSpace = CharRef(node, offset)
-                    } else {
-                        if (pendingSpace != null && out.isNotEmpty() && out.last() != ' ') {
-                            out.append(' ')
-                            refs.add(pendingSpace!!)
-                        }
-                        pendingSpace = null
-                        out.append(ch)
-                        refs.add(CharRef(node, offset))
-                    }
-                }
+            if (node is TextNode) {
+                appendText(node)
                 return
             }
-            val children = node.childNodes
-            for (i in 0 until children.length) walk(children.item(i))
+            node.childNodes().forEach(::walk)
         }
 
         walk(root)
@@ -98,7 +105,7 @@ internal class ReadestCfiResolver(
         return IndexedText(out.toString(), refs)
     }
 
-    private fun loadDocument(spineIndex: Int): org.w3c.dom.Document? {
+    private fun loadDocument(spineIndex: Int): Document? {
         val wanted = spinePaths.getOrNull(spineIndex)?.replace('\\', '/')?.trimStart('/') ?: return null
         val bytes = runCatching {
             val zip = openedZip ?: ZipFile(epubFile).also { openedZip = it }
@@ -113,35 +120,18 @@ internal class ReadestCfiResolver(
         }.getOrNull() ?: return null
 
         return runCatching {
-            val factory = DocumentBuilderFactory.newInstance().apply {
-                isNamespaceAware = true
-                isXIncludeAware = false
-                isExpandEntityReferences = false
-                runCatching { setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
-                runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
-                runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
-                runCatching { setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false) }
-            }
-            factory.newDocumentBuilder().apply {
-                setEntityResolver { _, _ -> org.xml.sax.InputSource(ByteArrayInputStream(ByteArray(0))) }
-            }.parse(ByteArrayInputStream(bytes))
+            Jsoup.parse(bytes.toString(Charsets.UTF_8), "", Parser.xmlParser())
+        }.recoverCatching {
+            Jsoup.parse(bytes.toString(Charsets.UTF_8))
         }.getOrNull()
     }
 
-    private fun findBody(root: Element?): Element? {
-        if (root == null) return null
-        val name = (root.localName ?: root.nodeName).substringAfter(':')
-        if (name.equals("body", true)) return root
-        val children = root.childNodes
-        for (i in 0 until children.length) {
-            val child = children.item(i)
-            if (child.nodeType == Node.ELEMENT_NODE) findBody(child as Element)?.let { return it }
-        }
-        return null
-    }
+    private fun documentElement(doc: Document): Element? =
+        doc.children().firstOrNull { it.tagName().equals("html", true) }
+            ?: doc.children().firstOrNull()
 
-    private fun nodeToParts(node: Node, offset: Int?): List<Part>? {
-        val parent = node.parentNode ?: return null
+    private fun nodeToParts(node: Node, offset: Int?, root: Element): List<Part>? {
+        val parent = node.parentNode() ?: return null
         val indexed = indexChildNodes(parent)
         val index = indexed.indexOfFirst { item ->
             when (item) {
@@ -156,20 +146,19 @@ internal class ReadestCfiResolver(
         if (chunk is List<*> && offset != null) {
             var sum = 0
             for (part in chunk) {
-                val n = part as? Node ?: continue
+                val n = part as? TextNode ?: continue
                 if (n === node) {
                     sum += offset
                     break
                 }
-                sum += n.nodeValue.orEmpty().length
+                sum += n.wholeText.length
             }
             adjustedOffset = sum
         }
-        val id = (node as? Element)?.getAttribute("id")?.takeIf { it.isNotBlank() }
+        val id = (node as? Element)?.id()?.takeIf { it.isNotBlank() }
         val current = Part(index, id, if (index % 2 == 1) adjustedOffset else null)
-        val docRoot = node.ownerDocument?.documentElement
-        return if (parent !== docRoot) {
-            val prefix = nodeToParts(parent, null) ?: return null
+        return if (parent !== root) {
+            val prefix = nodeToParts(parent, null, root) ?: return null
             prefix + current
         } else listOf(current)
     }
@@ -177,32 +166,29 @@ internal class ReadestCfiResolver(
     /** Port of Readest's foliate-js epubcfi.js indexChildNodes() semantics. */
     private fun indexChildNodes(parent: Node): MutableList<Any?> {
         val raw = mutableListOf<Node>()
-        val children = parent.childNodes
-        for (i in 0 until children.length) {
-            val child = children.item(i)
-            if (child.nodeType != Node.ELEMENT_NODE && child.nodeType != Node.TEXT_NODE && child.nodeType != Node.CDATA_SECTION_NODE) continue
-            val element = child as? Element
-            if (element?.hasAttribute("cfi-inert") == true) continue
-            if (element?.hasAttribute("cfi-skip") == true) raw += flattenSkip(child) else raw += child
+        for (child in parent.childNodes()) {
+            if (child !is Element && child !is TextNode) continue
+            if (child is Element && child.hasAttr("cfi-inert")) continue
+            if (child is Element && child.hasAttr("cfi-skip")) raw += flattenSkip(child) else raw += child
         }
 
         val grouped = mutableListOf<Any?>()
         for (node in raw) {
             val last = grouped.lastOrNull()
             if (grouped.isEmpty()) grouped += node
-            else if (isText(node)) {
+            else if (node is TextNode) {
                 when (last) {
                     is MutableList<*> -> @Suppress("UNCHECKED_CAST") (last as MutableList<Node>).add(node)
-                    is Node -> if (isText(last)) grouped[grouped.lastIndex] = mutableListOf(last, node) else grouped += node
+                    is TextNode -> grouped[grouped.lastIndex] = mutableListOf(last, node)
                     else -> grouped += node
                 }
             } else {
-                if (last is Node && last.nodeType == Node.ELEMENT_NODE) grouped += null
+                if (last is Element) grouped += null
                 grouped += node
             }
         }
-        if (grouped.firstOrNull() is Node && (grouped.first() as Node).nodeType == Node.ELEMENT_NODE) grouped.add(0, Marker.FIRST)
-        if (grouped.lastOrNull() is Node && (grouped.last() as Node).nodeType == Node.ELEMENT_NODE) grouped += Marker.LAST
+        if (grouped.firstOrNull() is Element) grouped.add(0, Marker.FIRST)
+        if (grouped.lastOrNull() is Element) grouped += Marker.LAST
         grouped.add(0, Marker.BEFORE)
         grouped += Marker.AFTER
         return grouped
@@ -210,18 +196,13 @@ internal class ReadestCfiResolver(
 
     private fun flattenSkip(node: Node): List<Node> {
         val out = mutableListOf<Node>()
-        val children = node.childNodes
-        for (i in 0 until children.length) {
-            val child = children.item(i)
-            if (child.nodeType != Node.ELEMENT_NODE && child.nodeType != Node.TEXT_NODE && child.nodeType != Node.CDATA_SECTION_NODE) continue
-            val element = child as? Element
-            if (element?.hasAttribute("cfi-inert") == true) continue
-            if (element?.hasAttribute("cfi-skip") == true) out += flattenSkip(child) else out += child
+        for (child in node.childNodes()) {
+            if (child !is Element && child !is TextNode) continue
+            if (child is Element && child.hasAttr("cfi-inert")) continue
+            if (child is Element && child.hasAttr("cfi-skip")) out += flattenSkip(child) else out += child
         }
         return out
     }
-
-    private fun isText(node: Node): Boolean = node.nodeType == Node.TEXT_NODE || node.nodeType == Node.CDATA_SECTION_NODE
 
     private fun buildRangeCfi(spineIndex: Int, start: List<Part>, end: List<Part>): String? {
         if (start.isEmpty() || end.isEmpty()) return null
@@ -249,7 +230,31 @@ internal class ReadestCfiResolver(
     }
 
     private fun escapeCfi(value: String): String = value.replace(Regex("([\\^\\[\\](),;=])"), "^$1")
-    private fun normalizeText(value: String): String = value.replace(Regex("\\s+"), " ").trim()
+
+    private fun canonicalChar(ch: Char): Char? = when (ch) {
+        '\u00ad' -> null
+        '\u00a0', '\u2007', '\u202f' -> ' '
+        '\u2018', '\u2019', '\u201a', '\u201b' -> '\''
+        '\u201c', '\u201d', '\u201e', '\u201f' -> '"'
+        '\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2212' -> '-'
+        else -> ch
+    }
+
+    private fun normalizeText(value: String): String {
+        val out = StringBuilder()
+        var pendingSpace = false
+        for (raw in value) {
+            val ch = canonicalChar(raw) ?: continue
+            if (ch.isWhitespace()) {
+                if (out.isNotEmpty()) pendingSpace = true
+            } else {
+                if (pendingSpace && out.isNotEmpty() && out.last() != ' ') out.append(' ')
+                pendingSpace = false
+                out.append(ch)
+            }
+        }
+        return out.toString().trim()
+    }
 
     private fun allMatches(haystack: String, needle: String): List<Int> {
         if (needle.isEmpty() || haystack.length < needle.length) return emptyList()
