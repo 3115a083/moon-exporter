@@ -95,6 +95,7 @@ private fun MoonExporterApp(context: Context) {
     var normalizeReadestNames by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf(tr("Wähle eine Moon+ Backup-Datei.", "Choose a Moon+ backup file.")) }
     var exportProgress by remember { mutableStateOf<Float?>(null) }
+    var exportFailed by remember { mutableStateOf(false) }
     var localBusy by remember { mutableStateOf(false) }
     var activeJob by remember { mutableStateOf<Job?>(null) }
     var serverUrl by remember { mutableStateOf("") }
@@ -150,6 +151,7 @@ private fun MoonExporterApp(context: Context) {
     val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         exportProgress = null
+        exportFailed = false
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -159,6 +161,7 @@ private fun MoonExporterApp(context: Context) {
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         exportProgress = null
+        exportFailed = false
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         launchWork(tr("Import abgebrochen", "Import cancelled")) {
             status = tr("Moon+ Ordner wird analysiert…", "Analyzing Moon+ folder…")
@@ -202,13 +205,19 @@ private fun MoonExporterApp(context: Context) {
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
         val chosen = books.filter { selected[it.key] == true }
         exportProgress = 0f
+        exportFailed = false
         launchWork(tr("Export abgebrochen", "Export cancelled")) {
-            Exporter.export(context, uri, chosen, exportMode, false, normalizeReadestNames) { progress ->
-                status = progress.message
-                exportProgress = progress.fraction
+            try {
+                Exporter.export(context, uri, chosen, exportMode, false, normalizeReadestNames) { progress ->
+                    status = progress.message
+                    exportProgress = progress.fraction
+                }
+                status = tr("Readest-Export abgeschlossen.", "Readest export complete.")
+                exportProgress = 1f
+            } catch (t: Throwable) {
+                exportFailed = true
+                throw t
             }
-            status = tr("Readest-Export abgeschlossen.", "Readest export complete.")
-            exportProgress = 1f
         }
     }
 
@@ -332,8 +341,12 @@ private fun MoonExporterApp(context: Context) {
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Text(
-                                if (localBusy) tr("Der aktuelle Teilschritt steht oben. Bei jedem Buch werden Quelle, Hash, EPUB-Struktur, Markierungen, Buchdatei, config.json und Bibliothek einzeln angezeigt.", "The current sub-step is shown above. For each book, source, hash, EPUB structure, highlights, book file, config.json and library update are shown separately.")
-                                else tr("Export beendet.", "Export finished."),
+                                when {
+                                    localBusy -> tr("Der aktuelle Teilschritt steht oben. Bei jedem Buch werden Quelle, Hash, EPUB-Struktur, Markierungen, Buchdatei, config.json und Bibliothek einzeln angezeigt.", "The current sub-step is shown above. For each book, source, hash, EPUB structure, highlights, book file, config.json and library update are shown separately.")
+                                    exportFailed -> tr("Export unterbrochen oder fehlgeschlagen.", "Export interrupted or failed.")
+                                    exportProgress != null && exportProgress!! >= 1f -> tr("Export erfolgreich beendet.", "Export completed successfully.")
+                                    else -> tr("Export unterbrochen.", "Export interrupted.")
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
