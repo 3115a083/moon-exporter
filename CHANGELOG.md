@@ -2,6 +2,38 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase.
 
+## 1.0.9 - 2026-09-13
+
+### Readest export performance
+- Direct Readest export now prepares each selected ebook source only once. An EPUB embedded in `.mrpro` therefore requires one backup scan instead of separate full scans for Readest hash, EPUB metadata and final copy.
+- The prepared ebook is stored only in a temporary per-export cache file, reused for hash/metadata/highlight resolution/copy, and deleted in `finally` immediately after that book is processed.
+- Local copying uses larger buffered streams to reduce SAF/ZIP I/O overhead.
+- The EPUB ZIP used for highlight resolution stays open while annotations of the same book are resolved instead of reopening the archive per chapter lookup.
+
+### Export progress UI
+- Local export progress is no longer shown as the generic progress bar in the backup card.
+- Added a dedicated `4. Exportfortschritt` section at the bottom of the screen with a determinate progress bar.
+- Direct Readest export reports seven named stages for every book: prepare source, calculate Readest ID, inspect EPUB, resolve highlights, copy ebook, write `config.json`, update library entry.
+- The current book number, total book count and current stage are shown while the export runs.
+- The alphabet rail down-arrow now targets the actual final list item so the bottom progress section remains reachable.
+
+### Exact Readest highlights
+- Fixed the 1.0.8 behavior that wrote chapter-start-only CFIs for Moon+ annotations. Those notes appeared in Readest but were not visibly highlighted and navigated only to the beginning of the chapter.
+- Added `ReadestCfiResolver`, which resolves the original Moon+ highlighted text against the actual EPUB XHTML and generates a real Readest/Foliate EPUB CFI range with start and end offsets.
+- The CFI node indexing follows Readest's current `foliate-js/epubcfi.js` semantics, including virtual text chunks, `cfi-inert` and `cfi-skip` handling.
+- Moon+ chapter information is used as the preferred spine location. If the highlighted text occurs more than once, the Moon+ source position is used to prefer the closest occurrence.
+- If a highlight cannot be resolved reliably, Moon Exporter does not invent a range. The original annotation remains preserved in `moon-export.mrexpt`.
+- Re-export removes previous Moon Exporter notes with the same stable IDs before inserting corrected range-CFI versions, while preserving unrelated/native Readest notes.
+- XHTML parsing remains bounded and disables external entities/DTD loading.
+
+### Verification
+- Added a synthetic EPUB regression test proving that `highlighted phrase` becomes a range CFI with explicit start/end offsets instead of a chapter-only CFI.
+- Tested app-code head: `a2c0e95c83a18b23ce15bd9a3f555761e47c49fe`.
+- Android CI run `34763052900`: success, including privacy scan, unit tests, lint, debug APK build and manifest/permission audit.
+- CodeQL run `34763052880`: success.
+- Debug artifact: `MoonExporter-1.0.9-debug`, artifact ID `10319672483`.
+- APK SHA256: `1ef495695eac655e89a55a4ef75d4d79601320e0854716c8266cff9fa260fc79`.
+
 ## 1.0.8 - 2026-09-13
 
 ### Readest direct export
@@ -58,7 +90,7 @@ All notable Moon Exporter revisions are recorded here so future development can 
 - Added support for Moon+ position values without a timestamp (`chapter@section#offset:percent%`) as used by `positions10.xml`, while retaining timestamped cloud `.po` values.
 - Progress matching now normalizes full path, basename and stem aliases and avoids ambiguous basename-only matches.
 - Original Moon+ raw position values remain preserved for later structural conversion work.
-- Added regression tests for `positions10.xml`, XML entity decoding, timestamp-free position values and unsafe XML declarations.
+- Added regression tests for `positions10.xml`, XML entity decoding, timestamp-free EPUB/PDF positions and unsafe XML declarations.
 
 ### UI
 - Added a draggable and tappable alphabetical A-Z rail for quickly jumping through long book lists.
