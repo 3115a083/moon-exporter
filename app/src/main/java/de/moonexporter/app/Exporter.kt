@@ -1,8 +1,11 @@
 package de.moonexporter.app
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
@@ -20,10 +23,30 @@ internal object Exporter {
         onProgress: (ExportProgress) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (mode == ExportMode.FULL) {
-            val result = ReadestDirectExporter.export(context, targetTree, books, normalizeReadestNames, onProgress)
-            val warningSuffix = if (result.skipped > 0) tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped") else ""
-            onProgress(ExportProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"), 1f))
-            return@withContext
+            val store = TransferStore(context.applicationContext)
+            val sessionId = store.createSession(targetTree, normalizeReadestNames, books)
+            val intent = Intent(context, ExportService::class.java)
+                .setAction(ExportService.ACTION_START)
+                .putExtra(ExportService.EXTRA_SESSION_ID, sessionId)
+            ContextCompat.startForegroundService(context, intent)
+            try {
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val state = ExportState.state.value
+                    if (state.sessionId == sessionId) onProgress(ExportProgress(state.status, state.fraction))
+                    when (store.session(sessionId)?.status) {
+                        "DONE" -> {
+                            onProgress(ExportProgress(tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified."), 1f))
+                            return@withContext
+                        }
+                        "INTERRUPTED" -> {
+                            val snapshot = ExportState.state.value
+                            error(snapshot.error ?: tr("Export unterbrochen. Der Auftrag bleibt gespeichert und kann fortgesetzt werden.", "Export interrupted. The saved job can be resumed."))
+                        }
+                    }
+                    delay(350)
+                }
+            } finally { store.close() }
         }
 
         val root = DocumentFile.fromTreeUri(context, targetTree) ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
