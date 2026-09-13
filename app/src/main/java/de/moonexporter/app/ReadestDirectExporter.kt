@@ -12,7 +12,6 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
-import java.io.OutputStream
 import java.security.MessageDigest
 import java.text.Normalizer
 import java.util.Locale
@@ -20,25 +19,25 @@ import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 import kotlin.math.roundToInt
 
-/**
- * Writes books directly into Readest's documented on-disk library layout.
- *
- * Readest keeps the shared shelf index in Books/library.json and managed books
- * under Books/<bookHash>/. bookHash is Readest's partialMD5, which intentionally
- * differs from KOReader's partialMD5 used by KOSync.
- *
- * nav.json is a derived cache. We deliberately do not fabricate it: current
- * Readest recomputes it from the EPUB when absent or stale. This keeps the
- * export compatible with future BOOK_NAV_VERSION changes.
- */
+/** Direct writer for Readest's local Books library. */
 internal object ReadestDirectExporter {
     private const val CONFIG_SCHEMA_VERSION = 3
-    private val READest_OFFSETS = longArrayOf(
+    private const val MAX_META_FILE = 4 * 1024 * 1024
+    private const val MAX_META_TOTAL = 16 * 1024 * 1024
+    private val READEST_OFFSETS = longArrayOf(
         0L, 1024L, 4096L, 16384L, 65536L, 262144L,
         1048576L, 4194304L, 16777216L, 67108864L, 268435456L, 1073741824L,
     )
 
     internal data class Result(val exported: Int, val skipped: Int, val warnings: List<String>)
+
+    private data class EpubInfo(
+        val title: String? = null,
+        val authors: List<String> = emptyList(),
+        val identifiers: List<String> = emptyList(),
+        val language: String? = null,
+        val navToSpine: Map<Int, Int> = emptyMap(),
+    )
 
     suspend fun export(
         context: Context,
@@ -77,7 +76,12 @@ internal object ReadestDirectExporter {
                 warnings += tr("${book.title}: keine Buchdatei", "${book.title}: no book file")
                 continue
             }
-            val source = book.epub ?: run { skipped++; continue }
+            val source = book.epub
+            if (source == null) {
+                skipped++
+                warnings += tr("${book.title}: Buchquelle fehlt", "${book.title}: book source missing")
+                continue
+            }
             val ext = source.fileName.substringAfterLast('.', book.extension).lowercase(Locale.ROOT)
             if (ext !in setOf("epub", "pdf")) {
                 skipped++
@@ -86,15 +90,22 @@ internal object ReadestDirectExporter {
             }
 
             val readestHash = openBookSource(context, source) { readestPartialMd5(it) }
-            val metaHash = metadataHash(book)
-            val dir = booksRoot.findFile(readestHash)?.takeIf { it.isDirectory }
-                ?: booksRoot.createDirectory(readestHash)
+            val epubInfo = if (ext == "epub") openBookSource(context, source) { inspectEpub(it) } else EpubInfo()
+            val title = epubInfo.title?.takeIf { it.isNotBlank() } ?: book.title
+            val authors = epubInfo.authors.ifEmpty { listOfNotNull(book.author?.takeIf { it.isNotBlank() }) }
+            val identifiers = epubInfo.identifiers.ifEmpty { listOfNotNull(book.isbn?.takeIf { it.isNotBlank() }) }
+            val metaHash = metadataHash(title, authors, identifiers)
+
+            val existingDir = booksRoot.findFile(readestHash)?.takeIf { it.isDirectory }
+            val dir = existingDir ?: booksRoot.createDirectory(readestHash)
                 ?: error(tr("Readest-Buchordner konnte nicht angelegt werden", "Could not create Readest book folder"))
 
-            val targetName = "${safeName(book.title)}.$ext"
-            var targetBook = dir.findFile(targetName)
-            if (targetBook == null) {
-                targetBook = dir.createFile(mimeFor(ext), targetName)
+            val existingBook = dir.listFiles().firstOrNull {
+                it.isFile && it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in setOf("epub", "pdf")
+            }
+            if (existingBook == null) {
+                val targetName = "${safeName(title)}.$ext"
+                val targetBook = dir.createFile(mimeFor(ext), targetName)
                     ?: error(tr("Readest-Buchdatei konnte nicht angelegt werden", "Could not create Readest book file"))
                 context.contentResolver.openOutputStream(targetBook.uri, "w")?.use { output ->
                     openBookSource(context, source) { input -> input.copyTo(output, 64 * 1024) }
@@ -103,35 +114,48 @@ internal object ReadestDirectExporter {
 
             val now = System.currentTimeMillis()
             val coverHash = writeCoverIfNeeded(context, dir, source.cover)
-            val existingConfigFile = dir.findFile("config.json")
-            val config = existingConfigFile?.let { file ->
-                readText(context, file, 8 * 1024 * 1024)?.takeIf { it.isNotBlank() }?.let { runCatching { JSONObject(it) }.getOrNull() }
-            } ?: JSONObject()
-            mergeConfig(config, book, readestHash, metaHash, now)
-            writeOrReplaceText(context, dir, "config.json", config.toString())
-
-            // Keep the original Moon+ annotation payload as a lossless fallback.
+            val configFile = dir.findFile("config.json")
+            val originalConfig = configFile?.let { readText(context, it, 8 * 1024 * 1024) }.orEmpty()
+            val config = if (originalConfig.isBlank()) JSONObject() else runCatching { JSONObject(originalConfig) }
+                .getOrElse { error(tr("Vorhandene Readest config.json ist ungültig", "Existing Readest config.json is invalid")) }
+            val existed = originalConfig.isNotBlank()
+            if (existed) backupOnce(context, dir, "config.moon-exporter.bak.json", originalConfig, "application/json")
+            val mappedNotes = mergeConfig(config, book, readestHash, metaHash, epubInfo, now, existed)
+            if (book.hasAnnotations && mappedNotes < (book.annotation?.records?.size ?: 0)) {
+                warnings += tr(
+                    "${book.title}: nicht exakt zuordenbare Markierungen zusätzlich als .mrexpt erhalten",
+                    "${book.title}: annotations that could not be mapped exactly were also preserved as .mrexpt",
+                )
+            }
+            writeOrReplaceText(context, dir, "config.json", config.toString(), "application/json")
             if (book.hasAnnotations) {
-                writeOrReplaceText(context, dir, "moon-export.mrexpt", Exporter.mrexptFor(book))
+                writeOrReplaceText(context, dir, "moon-export.mrexpt", Exporter.mrexptFor(book), "text/plain")
             }
 
             val row = byHash[readestHash] ?: JSONObject().also { byHash[readestHash] = it }
-            mergeLibraryRow(row, book, readestHash, metaHash, coverHash, now, ext)
+            mergeLibraryRow(row, title, authors, identifiers, epubInfo.language, readestHash, metaHash, coverHash, now, ext, book.position)
             exported++
         }
 
         if (originalLibrary.isNotBlank()) {
-            writeOrReplaceText(context, booksRoot, "library.json.bak", originalLibrary)
+            backupOnce(context, booksRoot, "library.moon-exporter.bak.json", originalLibrary, "application/json")
         }
         val merged = JSONArray()
         byHash.values.forEach { merged.put(it) }
-        writeOrReplaceText(context, booksRoot, "library.json", merged.toString())
-        booksRoot.findFile(".nomedia") ?: booksRoot.createFile("application/octet-stream", ".nomedia")
-
+        writeOrReplaceText(context, booksRoot, "library.json", merged.toString(), "application/json")
+        if (booksRoot.findFile(".nomedia") == null) booksRoot.createFile("application/octet-stream", ".nomedia")
         Result(exported, skipped, warnings)
     }
 
-    private fun mergeConfig(config: JSONObject, book: BookItem, bookHash: String, metaHash: String, now: Long) {
+    private fun mergeConfig(
+        config: JSONObject,
+        book: BookItem,
+        bookHash: String,
+        metaHash: String,
+        epubInfo: EpubInfo,
+        now: Long,
+        existed: Boolean,
+    ): Int {
         config.put("schemaVersion", maxOf(CONFIG_SCHEMA_VERSION, config.optInt("schemaVersion", 0)))
         config.put("bookHash", bookHash)
         config.put("metaHash", metaHash)
@@ -140,32 +164,32 @@ internal object ReadestDirectExporter {
         if (!config.has("searchConfig")) config.put("searchConfig", JSONObject())
 
         book.position?.percent?.let { percent ->
-            val current = percent.coerceIn(0.0, 100.0).roundToInt()
-            // Readest documents progress as [current,total]. Using a 100-unit
-            // fallback preserves the Moon+ percentage without inventing a CFI.
-            config.put("progress", JSONArray().put(current).put(100))
+            val moonTimestamp = book.position.timestampMs
+            val targetTimestamp = config.optLong("updatedAt", 0L)
+            val shouldReplace = !existed || !config.has("progress") || (moonTimestamp != null && moonTimestamp > targetTimestamp)
+            if (shouldReplace) config.put("progress", progressPair(percent))
         }
 
         val existing = config.optJSONArray("booknotes") ?: JSONArray()
         val knownIds = mutableSetOf<String>()
         for (i in 0 until existing.length()) existing.optJSONObject(i)?.optString("id")?.let(knownIds::add)
+        var mapped = 0
         for (record in book.annotation?.records.orEmpty()) {
-            val note = directNote(bookHash, metaHash, record) ?: continue
+            val note = directNote(bookHash, metaHash, record, epubInfo) ?: continue
             if (knownIds.add(note.getString("id"))) existing.put(note)
+            mapped++
         }
         if (existing.length() > 0) config.put("booknotes", existing)
+        return mapped
     }
 
-    private fun directNote(bookHash: String, metaHash: String, record: AnnotationRecord): JSONObject? {
+    private fun directNote(bookHash: String, metaHash: String, record: AnnotationRecord, epubInfo: EpubInfo): JSONObject? {
         val chapter = record.chapter ?: return null
-        if (chapter < 0 || chapter > 100000) return null
+        val spineIndex = epubInfo.navToSpine[chapter] ?: return null
         val text = record.original?.trim().orEmpty()
         val noteText = record.note.orEmpty()
         if (text.isBlank() && noteText.isBlank()) return null
-        // Conservative chapter-start CFI. We never invent an in-document text
-        // path. Readest itself uses the same form as a fallback for Moon+ imports.
-        val spineStep = 2 * (chapter + 1)
-        val cfi = "epubcfi(/6/$spineStep!)"
+        val cfi = "epubcfi(/6/${2 * (spineIndex + 1)}!)"
         val created = record.timestampMs?.takeIf { it > 0 } ?: System.currentTimeMillis()
         val idSeed = "${record.id}|$chapter|${record.position}|$text|$noteText"
         return JSONObject()
@@ -186,31 +210,32 @@ internal object ReadestDirectExporter {
 
     private fun mergeLibraryRow(
         row: JSONObject,
-        book: BookItem,
+        title: String,
+        authors: List<String>,
+        identifiers: List<String>,
+        language: String?,
         hash: String,
         metaHash: String,
         coverHash: String?,
         now: Long,
         extension: String,
+        position: MoonPosition?,
     ) {
-        val format = extension.uppercase(Locale.ROOT)
         row.put("hash", hash)
-        row.put("format", format)
+        row.put("format", extension.uppercase(Locale.ROOT))
         row.put("metaHash", metaHash)
-        row.put("title", book.title)
-        row.put("sourceTitle", book.title)
-        row.put("primaryLanguage", row.optString("primaryLanguage").ifBlank { "en" })
-        book.author?.takeIf { it.isNotBlank() }?.let { row.put("author", it) }
-
+        row.put("title", title)
+        row.put("sourceTitle", title)
+        if (authors.isNotEmpty()) row.put("author", authors.joinToString(", "))
+        language?.takeIf { it.isNotBlank() }?.let { row.put("primaryLanguage", it) }
         val metadata = row.optJSONObject("metadata") ?: JSONObject()
-        metadata.put("title", book.title)
-        metadata.put("sortAs", book.title)
-        book.author?.takeIf { it.isNotBlank() }?.let { metadata.put("author", it) }
-        book.isbn?.takeIf { it.isNotBlank() }?.let {
-            metadata.put("identifier", it)
-            metadata.put("isbn", it)
-            if (!metadata.has("altIdentifier")) metadata.put("altIdentifier", JSONArray().put(it))
-        }
+        metadata.put("title", title)
+        metadata.put("sortAs", title)
+        if (authors.isNotEmpty()) metadata.put("author", authors.joinToString(", "))
+        language?.takeIf { it.isNotBlank() }?.let { metadata.put("language", it) }
+        preferredIdentifiers(identifiers).firstOrNull()?.let { metadata.put("identifier", it) }
+        identifiers.firstOrNull { it.lowercase(Locale.ROOT).contains("isbn") }?.let { metadata.put("isbn", normalizeIdentifier(it)) }
+        if (identifiers.size > 1) metadata.put("altIdentifier", JSONArray(identifiers.map(::normalizeIdentifier)))
         row.put("metadata", metadata)
         if (!row.has("createdAt")) row.put("createdAt", now)
         if (!row.has("downloadedAt")) row.put("downloadedAt", now)
@@ -218,28 +243,45 @@ internal object ReadestDirectExporter {
         row.put("metadataUpdatedAt", now)
         row.put("deletedAt", JSONObject.NULL)
         coverHash?.let { row.put("coverHash", it) }
-        book.position?.percent?.let { row.put("progress", JSONArray().put(it.coerceIn(0.0, 100.0).roundToInt()).put(100)) }
+        if (!row.has("progress")) position?.percent?.let { row.put("progress", progressPair(it)) }
     }
 
-    private fun metadataHash(book: BookItem): String {
-        val title = book.title.trim()
-        val authors = book.author.orEmpty().trim()
-        val identifiers = book.isbn.orEmpty().trim()
-        return md5(Normalizer.normalize("$title|$authors|$identifiers", Normalizer.Form.NFC))
+    private fun progressPair(percent: Double): JSONArray {
+        val current = (percent.coerceIn(0.0, 100.0) * 100.0).roundToInt()
+        return JSONArray().put(current).put(10_000)
     }
+
+    private fun metadataHash(title: String, authors: List<String>, identifiers: List<String>): String {
+        val source = "$title|${authors.joinToString(",")}|${preferredIdentifiers(identifiers).joinToString(",")}"
+        return md5(Normalizer.normalize(source, Normalizer.Form.NFC))
+    }
+
+    private fun preferredIdentifiers(values: List<String>): List<String> {
+        if (values.isEmpty()) return emptyList()
+        for (scheme in listOf("uuid", "calibre", "isbn")) {
+            values.firstOrNull { scheme in it.lowercase(Locale.ROOT) }?.let { return listOf(normalizeIdentifier(it)) }
+        }
+        return values.filter { it.isNotBlank() }.map(::normalizeIdentifier)
+    }
+
+    private fun normalizeIdentifier(value: String): String = when {
+        "urn:" in value -> value.substringAfterLast(':')
+        ':' in value -> value.substringAfter(':')
+        else -> value
+    }.trim()
 
     internal fun readestPartialMd5(input: InputStream): String {
         val digest = MessageDigest.getInstance("MD5")
-        val chunks = Array(READest_OFFSETS.size) { ByteArray(1024) }
-        val counts = IntArray(READest_OFFSETS.size)
+        val chunks = Array(READEST_OFFSETS.size) { ByteArray(1024) }
+        val counts = IntArray(READEST_OFFSETS.size)
         var absolute = 0L
         val buffer = ByteArray(64 * 1024)
         while (true) {
             val n = input.read(buffer)
             if (n < 0) break
             val blockEnd = absolute + n
-            for (i in READest_OFFSETS.indices) {
-                val start = READest_OFFSETS[i]
+            for (i in READEST_OFFSETS.indices) {
+                val start = READEST_OFFSETS[i]
                 val end = start + 1024L
                 if (blockEnd <= start || absolute >= end) continue
                 val from = maxOf(absolute, start)
@@ -253,10 +295,107 @@ internal object ReadestDirectExporter {
             absolute = blockEnd
         }
         for (i in chunks.indices) {
-            if (READest_OFFSETS[i] >= absolute) break
+            if (READEST_OFFSETS[i] >= absolute) break
             if (counts[i] > 0) digest.update(chunks[i], 0, counts[i])
         }
         return digest.digest().joinToString("") { "%02x".format(Locale.ROOT, it) }
+    }
+
+    private fun inspectEpub(input: InputStream): EpubInfo {
+        val texts = linkedMapOf<String, String>()
+        var total = 0
+        ZipInputStream(input.buffered()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (entry.isDirectory) continue
+                val clean = entry.name.replace('\\', '/').trimStart('/')
+                if (clean.contains("../") || clean.startsWith("..")) continue
+                val lower = clean.lowercase(Locale.ROOT)
+                val wanted = lower.endsWith(".opf") || lower.endsWith(".ncx") ||
+                    (lower.endsWith(".xhtml") && ("nav" in lower || "toc" in lower))
+                if (!wanted) continue
+                val bytes = readBounded(zip, MAX_META_FILE) ?: continue
+                total += bytes.size
+                if (total > MAX_META_TOTAL) break
+                texts[clean] = bytes.toString(Charsets.UTF_8)
+            }
+        }
+        val opfEntry = texts.entries.firstOrNull { it.key.endsWith(".opf", true) } ?: return EpubInfo()
+        val opfPath = opfEntry.key
+        val opf = opfEntry.value
+        val title = tagValues(opf, "title").firstOrNull()?.let(::xmlDecode)
+        val authors = tagValues(opf, "creator").map(::xmlDecode).filter { it.isNotBlank() }
+        val identifiers = tagValues(opf, "identifier").map(::xmlDecode).filter { it.isNotBlank() }
+        val language = tagValues(opf, "language").firstOrNull()?.let(::xmlDecode)
+
+        val manifest = linkedMapOf<String, String>()
+        Regex("<item\\b[^>]*>", RegexOption.IGNORE_CASE).findAll(opf).forEach { m ->
+            val tag = m.value
+            val id = attr(tag, "id")
+            val href = attr(tag, "href")
+            if (!id.isNullOrBlank() && !href.isNullOrBlank()) manifest[id] = resolvePath(opfPath, href)
+        }
+        val spineIds = Regex("<itemref\\b[^>]*>", RegexOption.IGNORE_CASE).findAll(opf)
+            .mapNotNull { attr(it.value, "idref") }.toList()
+        val spinePaths = spineIds.mapNotNull(manifest::get)
+        val pathToSpine = spinePaths.mapIndexed { index, path -> normalizeHref(path) to index }.toMap()
+
+        val navHrefs = mutableListOf<String>()
+        val opfDir = opfPath.substringBeforeLast('/', "")
+        texts.entries.firstOrNull { it.key.endsWith(".ncx", true) }?.let { entry ->
+            Regex("<content\\b[^>]*\\bsrc\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                .findAll(entry.value).forEach { navHrefs += resolvePath(entry.key, it.groupValues[1]) }
+        }
+        if (navHrefs.isEmpty()) {
+            texts.entries.firstOrNull { it.key.endsWith(".xhtml", true) }?.let { entry ->
+                Regex("<a\\b[^>]*\\bhref\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    .findAll(entry.value).forEach { navHrefs += resolvePath(entry.key, it.groupValues[1]) }
+            }
+        }
+        val navToSpine = linkedMapOf<Int, Int>()
+        navHrefs.forEachIndexed { navIndex, href -> pathToSpine[normalizeHref(href)]?.let { navToSpine[navIndex] = it } }
+        return EpubInfo(title, authors, identifiers, language, navToSpine)
+    }
+
+    private fun tagValues(xml: String, localName: String): List<String> =
+        Regex("<(?:[A-Za-z0-9_-]+:)?$localName\\b[^>]*>(.*?)</(?:[A-Za-z0-9_-]+:)?$localName>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .findAll(xml).map { it.groupValues[1].replace(Regex("<[^>]+>"), "").trim() }.toList()
+
+    private fun attr(tag: String, name: String): String? =
+        Regex("\\b${Regex.escape(name)}\\s*=\\s*['\"]([^'\"]*)['\"]", RegexOption.IGNORE_CASE)
+            .find(tag)?.groupValues?.getOrNull(1)?.let(::xmlDecode)
+
+    private fun xmlDecode(value: String): String = value
+        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        .replace("&quot;", "\"").replace("&apos;", "'")
+
+    private fun resolvePath(containerPath: String, href: String): String {
+        val raw = href.substringBefore('#').substringBefore('?').replace('\\', '/')
+        if (raw.startsWith('/')) return raw.trimStart('/')
+        val parts = (containerPath.substringBeforeLast('/', "") + "/" + raw).split('/')
+        val out = ArrayDeque<String>()
+        for (part in parts) when (part) {
+            "", "." -> Unit
+            ".." -> if (out.isNotEmpty()) out.removeLast()
+            else -> out.addLast(part)
+        }
+        return out.joinToString("/")
+    }
+
+    private fun normalizeHref(path: String): String = path.substringBefore('#').substringBefore('?').trimStart('/').lowercase(Locale.ROOT)
+
+    private fun readBounded(input: InputStream, max: Int): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) break
+            total += n
+            if (total > max) return null
+            out.write(buffer, 0, n)
+        }
+        return out.toByteArray()
     }
 
     private fun writeCoverIfNeeded(context: Context, dir: DocumentFile, bitmap: Bitmap?): String? {
@@ -282,8 +421,7 @@ internal object ReadestDirectExporter {
                     while (true) {
                         val entry = zip.nextEntry ?: break
                         if (entry.isDirectory) continue
-                        val clean = entry.name.replace('\\', '/').trimStart('/')
-                        if (clean == wanted) return block(zip)
+                        if (entry.name.replace('\\', '/').trimStart('/') == wanted) return block(zip)
                     }
                 }
             }
@@ -296,35 +434,23 @@ internal object ReadestDirectExporter {
         error(tr("Keine Buchdatei zugeordnet", "No book file matched"))
     }
 
-    private fun readText(context: Context, file: DocumentFile, maxBytes: Int): String? {
-        return context.contentResolver.openInputStream(file.uri)?.use { input ->
-            val out = ByteArrayOutputStream()
-            val buffer = ByteArray(16 * 1024)
-            var total = 0
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                total += n
-                if (total > maxBytes) error(tr("Readest-Metadatei ist zu groß", "Readest metadata file is too large"))
-                out.write(buffer, 0, n)
-            }
-            out.toString(Charsets.UTF_8.name())
-        }
+    private fun readText(context: Context, file: DocumentFile, maxBytes: Int): String? =
+        context.contentResolver.openInputStream(file.uri)?.use { input -> readBounded(input, maxBytes)?.toString(Charsets.UTF_8) }
+
+    private fun backupOnce(context: Context, dir: DocumentFile, name: String, text: String, mime: String) {
+        if (dir.findFile(name) != null) return
+        val file = dir.createFile(mime, name) ?: return
+        context.contentResolver.openOutputStream(file.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
     }
 
-    private fun writeOrReplaceText(context: Context, dir: DocumentFile, name: String, text: String) {
-        val existing = dir.findFile(name)
-        val file = existing ?: dir.createFile("application/json", name)
+    private fun writeOrReplaceText(context: Context, dir: DocumentFile, name: String, text: String, mime: String) {
+        val file = dir.findFile(name) ?: dir.createFile(mime, name)
             ?: error(tr("Datei konnte nicht angelegt werden: $name", "Could not create file: $name"))
-        context.contentResolver.openOutputStream(file.uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
+        context.contentResolver.openOutputStream(file.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
             ?: error(tr("Datei konnte nicht geschrieben werden: $name", "Could not write file: $name"))
     }
 
-    private fun moonColor(color: Int?): String = when (color) {
-        null -> "yellow"
-        in Int.MIN_VALUE..-10000000 -> "blue"
-        else -> "yellow"
-    }
+    private fun moonColor(color: Int?): String = if (color != null && color < -10_000_000) "blue" else "yellow"
 
     private fun mimeFor(extension: String): String = when (extension) {
         "epub" -> "application/epub+zip"
