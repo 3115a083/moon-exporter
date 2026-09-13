@@ -8,8 +8,8 @@ import java.util.zip.ZipInputStream
 
 /** Exact Readest identity fallback used when an already-existing target folder cannot be rediscovered by metadata. */
 internal object ReadestIdentity {
-    internal fun chooseHash(newHash: String?, knownHash: String?, libraryHash: String?, sourceHash: String?): String? =
-        newHash ?: knownHash ?: libraryHash ?: sourceHash
+    internal fun chooseHash(newHash: String?, knownHash: String?, recentHash: String?, libraryHash: String?, sourceHash: String?): String? =
+        newHash ?: knownHash ?: recentHash ?: libraryHash ?: sourceHash
 
     suspend fun sourceHash(context: Context, source: EpubMatch): String? = withContext(Dispatchers.IO) {
         runCatching {
