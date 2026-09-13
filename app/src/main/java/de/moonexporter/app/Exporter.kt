@@ -1,13 +1,18 @@
 package de.moonexporter.app
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.InputStream
 import kotlin.coroutines.coroutineContext
+
+internal data class ExportProgress(val message: String, val fraction: Float?)
 
 internal object Exporter {
     suspend fun export(
@@ -16,44 +21,80 @@ internal object Exporter {
         books: List<BookItem>,
         mode: ExportMode,
         includeDiagnostics: Boolean,
-        onProgress: (String) -> Unit,
+        normalizeReadestNames: Boolean = true,
+        onProgress: (ExportProgress) -> Unit,
     ) = withContext(Dispatchers.IO) {
+        if (mode == ExportMode.FULL) {
+            val store = TransferStore(context.applicationContext)
+            val pending = store.latestUnfinishedSession()
+            val sessionId = when (ManualSessionPolicy.decide(pending?.targetUri?.toString(), targetTree.toString())) {
+                ManualSessionDecision.CREATE_NEW -> store.createSession(targetTree, normalizeReadestNames, books)
+                ManualSessionDecision.SUPERSEDE_AND_CREATE -> {
+                    // A manual retry uses the current analysis/selection, never a stale payload
+                    // from an older interrupted app version. Successfully committed books remain
+                    // available through completed_books and are revalidated by ExportService.
+                    requireNotNull(pending)
+                    store.setSessionStatus(pending.id, "SUPERSEDED")
+                    store.createSession(targetTree, normalizeReadestNames, books)
+                }
+                ManualSessionDecision.BLOCK_OTHER_TARGET -> {
+                    store.close()
+                    error(tr("Es existiert noch ein unterbrochener Readest-Export für ein anderes Ziel. Öffne die App erneut mit Zugriff auf dieses Ziel oder beende/repariere zuerst diesen Auftrag.", "An interrupted Readest export for another target still exists. Resume or repair it before starting a different target."))
+                }
+            }
+            val intent = Intent(context, ExportService::class.java)
+                .setAction(ExportService.ACTION_START)
+                .putExtra(ExportService.EXTRA_SESSION_ID, sessionId)
+            ContextCompat.startForegroundService(context, intent)
+            try {
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val state = ExportState.state.value
+                    if (state.sessionId == sessionId) onProgress(ExportProgress(state.status, state.fraction))
+                    when (store.session(sessionId)?.status) {
+                        "DONE" -> {
+                            onProgress(ExportProgress(tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified."), 1f))
+                            return@withContext
+                        }
+                        "INTERRUPTED" -> {
+                            val snapshot = ExportState.state.value
+                            error(snapshot.error ?: tr("Export unterbrochen. Der Auftrag bleibt gespeichert und kann fortgesetzt werden.", "Export interrupted. The saved job can be resumed."))
+                        }
+                    }
+                    delay(350)
+                }
+            } catch (e: CancellationException) {
+                val activity = context as? Activity
+                if (activity != null && !activity.isFinishing && !activity.isChangingConfigurations) {
+                    runCatching { context.startService(Intent(context, ExportService::class.java).setAction(ExportService.ACTION_CANCEL)) }
+                }
+                throw e
+            } finally { store.close() }
+        }
+
         val root = DocumentFile.fromTreeUri(context, targetTree) ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
         val created = mutableListOf<DocumentFile>()
         try {
-            val readme = createUnique(root, "README-Moon-Exporter.txt", "text/plain").also(created::add)
-            writeText(context, readme, readmeText())
+            val total = books.size.coerceAtLeast(1)
             books.forEachIndexed { index, book ->
                 coroutineContext.ensureActive()
-                onProgress(tr("Export ${index + 1}/${books.size}: ${book.title}", "Export ${index + 1}/${books.size}: ${book.title}"))
+                onProgress(ExportProgress(
+                    tr("Buch ${index + 1}/${books.size}: Markierungen als .mrexpt schreiben · ${book.title}", "Book ${index + 1}/${books.size}: writing highlights as .mrexpt · ${book.title}"),
+                    index.toFloat() / total,
+                ))
                 if (book.hasAnnotations) {
                     val file = createUnique(root, "${safeName(book.title)}.mrexpt", "text/plain").also(created::add)
                     writeText(context, file, mrexptFor(book))
                 }
-                if (mode == ExportMode.FULL) exportBook(context, root, book, created)
             }
             if (includeDiagnostics) {
+                onProgress(ExportProgress(tr("Diagnosebericht schreiben", "Writing diagnostic report"), 0.95f))
                 val diagnostic = createUnique(root, "moon-exporter-diagnostic.json", "application/json").also(created::add)
                 writeText(context, diagnostic, diagnosticJson(books, mode))
             }
         } catch (t: Throwable) {
             created.asReversed().forEach { runCatching { it.delete() } }
             throw t
-        }
-    }
-
-    private fun exportBook(context: Context, root: DocumentFile, book: BookItem, created: MutableList<DocumentFile>) {
-        val match = book.epub ?: return
-        val source: InputStream = when {
-            match.uri != null -> context.contentResolver.openInputStream(match.uri) ?: return
-            match.embeddedPath != null -> File(match.embeddedPath).takeIf { it.isFile }?.inputStream() ?: return
-            else -> return
-        }
-        source.use { input ->
-            val extension = match.fileName.substringAfterLast('.', book.extension).ifBlank { book.extension }
-            val target = createUnique(root, "${safeName(book.title)}.$extension", mimeFor(extension)).also(created::add)
-            context.contentResolver.openOutputStream(target.uri, "w")?.use { output -> input.copyTo(output, 64 * 1024) }
-                ?: error(tr("Zieldatei konnte nicht geöffnet werden", "Could not open target file"))
         }
     }
 
@@ -101,12 +142,6 @@ internal object Exporter {
             ?: error(tr("Datei konnte nicht geschrieben werden", "Could not write file"))
     }
 
-    private fun mimeFor(extension: String): String = when (extension.lowercase()) {
-        "epub" -> "application/epub+zip"
-        "pdf" -> "application/pdf"
-        else -> "application/octet-stream"
-    }
-
     private fun diagnosticJson(books: List<BookItem>, mode: ExportMode): String = buildString {
         append("{\n  \"format\":\"moon-exporter-diagnostic\",\n  \"mode\":${mode.name.jsonEscape()},\n  \"books\":[\n")
         books.forEachIndexed { index, b ->
@@ -115,18 +150,4 @@ internal object Exporter {
         }
         append("\n  ]\n}\n")
     }
-
-    private fun readmeText(): String = """
-Moon Exporter
-
-DEUTSCH
-Readest: Buch in Readest öffnen, Annotationen importieren, Moon+ Reader wählen und die passende .mrexpt-Datei auswählen.
-Der aktuelle Lesefortschritt wird nicht durch .mrexpt übertragen. Dafür kann Moon Exporter optional KOSync oder Calibre-Web Automated verwenden.
-Bei KOSync/CWA wird niemals die E-Book-Datei hochgeladen. Übertragen werden nur Dokument-ID (partialMD5) und Fortschrittsdaten.
-
-ENGLISH
-Readest: open the book in Readest, choose annotation import, select Moon+ Reader and pick the matching .mrexpt file.
-Current reading progress is not carried by .mrexpt. Moon Exporter can optionally send progress through KOSync or Calibre-Web Automated.
-KOSync/CWA never uploads the ebook file. Only the document id (partialMD5) and reading progress are sent.
-""".trimIndent()
 }
