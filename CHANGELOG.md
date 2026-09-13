@@ -2,6 +2,25 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase. Older entries are intentionally concise; `docs/PROJECT_STATE.md` and the private handoff contain the current binding implementation rules.
 
+## 1.0.14 - 2026-09-13
+
+### Fresh transfer sources on manual retry
+- Fixed the real-device error `Keine Buchdatei für ... gespeichert` after retrying an interrupted Readest export.
+- Root cause: a manual retry on the same Readest target reused the old unfinished session payload unchanged. That payload could still contain an older `BookItem` with `epub = null` even when the current analysis had already resolved the correct book source.
+- A deliberate manual retry to the same target now marks the stale session `SUPERSEDED` and creates a fresh session from the current selection and current source references.
+- Previously committed books are still preserved through `completed_books`, revalidated against the target, and skipped when unchanged.
+- App-start automatic resume now requires every persisted transfer item to still contain a usable book source. Legacy source-less sessions are not auto-started into the same failure loop.
+- A pending session for another target remains blocked.
+- Added regression tests for same-target session replacement, different-target blocking, and source requirements for automatic resume.
+
+### Verification
+- Tested app-code head: `22f20e43701fccbc0c5c1e8ed64b5364a5d42a79`.
+- Android CI run `34780217834`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34780217703`: success.
+- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10325540078`.
+- Artifact ZIP digest: `sha256:7ea0f7d2c13a94fd0645c6ee15e5475daddf1812539d0c882123949a855b48ce`.
+- APK SHA256: `2eb67f2842baeba96902d35680510f693828f4ba50154879e62772c4eb2e227c`.
+
 ## 1.0.13 - 2026-09-13
 
 ### Deterministic Readest validation
