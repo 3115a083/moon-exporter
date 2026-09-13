@@ -50,13 +50,39 @@ internal object KoSyncClient {
         val trimmed = raw.trim().trimEnd('/')
         require(trimmed.isNotBlank()) { tr("Server-URL fehlt", "Server URL is missing") }
         val uri = URI(trimmed)
-        require(uri.scheme.equals("https", true)) { tr("Nur HTTPS ist erlaubt", "HTTPS is required") }
-        require(!uri.host.isNullOrBlank()) { tr("Ungültige Server-URL", "Invalid server URL") }
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+        require(scheme == "https" || scheme == "http") { tr("Nur HTTP oder HTTPS ist erlaubt", "Only HTTP or HTTPS is allowed") }
+        val host = uri.host ?: uri.authority?.substringBefore(':')
+        require(!host.isNullOrBlank()) { tr("Ungültige Server-URL", "Invalid server URL") }
+        if (scheme == "http") {
+            require(isPrivateHttpHost(host)) {
+                tr("HTTP ist nur für private Heimnetz-Adressen erlaubt", "HTTP is only allowed for private home-network addresses")
+            }
+        }
         return when (type) {
             ServerType.CALIBRE_WEB_AUTOMATED -> if (trimmed.endsWith("/kosync", true)) trimmed.dropLast(7).trimEnd('/') else trimmed
             ServerType.BOOKLORE -> if (trimmed.endsWith("/api/koreader", true)) trimmed.dropLast(13).trimEnd('/') else trimmed
             ServerType.STANDARD_KOSYNC -> trimmed
         }
+    }
+
+    internal fun isPrivateHttpHost(rawHost: String): Boolean {
+        val host = rawHost.trim().removePrefix("[").removeSuffix("]").lowercase(Locale.ROOT)
+        if (host == "localhost" || host == "::1") return true
+        if (!host.contains('.') && !host.contains(':')) return true
+        if (host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".home.arpa")) return true
+
+        val ipv4 = host.split('.').mapNotNull { it.toIntOrNull() }
+        if (ipv4.size == 4 && ipv4.all { it in 0..255 }) {
+            return ipv4[0] == 10 ||
+                ipv4[0] == 127 ||
+                (ipv4[0] == 169 && ipv4[1] == 254) ||
+                (ipv4[0] == 172 && ipv4[1] in 16..31) ||
+                (ipv4[0] == 192 && ipv4[1] == 168)
+        }
+
+        return host.startsWith("fc") || host.startsWith("fd") ||
+            host.startsWith("fe8") || host.startsWith("fe9") || host.startsWith("fea") || host.startsWith("feb")
     }
 
     internal fun endpointRoot(config: SyncConfig): String {
