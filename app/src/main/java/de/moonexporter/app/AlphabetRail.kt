@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,8 @@ internal fun AlphabetRail(
     books: List<BookItem>,
     modifier: Modifier = Modifier,
     onBookIndex: (Int) -> Unit,
+    onTop: () -> Unit,
+    onBottom: () -> Unit,
 ) {
     val letters = remember { listOf("#") + ('A'..'Z').map(Char::toString) }
     val firstIndex = remember(books) {
@@ -55,35 +58,55 @@ internal fun AlphabetRail(
 
     Column(
         modifier = modifier
-            .width(30.dp)
-            .fillMaxHeight(0.86f)
+            .width(32.dp)
+            .fillMaxHeight(0.9f)
             .clip(RoundedCornerShape(14.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.94f))
-            .onSizeChanged { heightPx = it.height.coerceAtLeast(1) }
-            .pointerInput(books) {
-                detectVerticalDragGestures(
-                    onDragStart = { jump(it.y) },
-                    onVerticalDrag = { change, _ ->
-                        change.consume()
-                        jump(change.position.y)
-                    },
-                )
-            }
-            .padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.SpaceEvenly,
+            .padding(vertical = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        letters.forEach { letter ->
-            val enabled = firstIndex.containsKey(letter)
-            Text(
-                text = letter,
-                fontSize = 9.sp,
-                lineHeight = 9.sp,
-                modifier = Modifier
-                    .alpha(if (enabled) 1f else 0.28f)
-                    .clickable(enabled = enabled) { firstIndex[letter]?.let(onBookIndex) }
-                    .padding(horizontal = 5.dp),
-            )
+        Text(
+            text = "↑",
+            fontSize = 18.sp,
+            lineHeight = 20.sp,
+            modifier = Modifier.clickable(onClick = onTop).padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .onSizeChanged { heightPx = it.height.coerceAtLeast(1) }
+                .pointerInput(books) {
+                    detectVerticalDragGestures(
+                        onDragStart = { jump(it.y) },
+                        onVerticalDrag = { change, _ ->
+                            change.consume()
+                            jump(change.position.y)
+                        },
+                    )
+                },
+            verticalArrangement = Arrangement.SpaceEvenly,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            letters.forEach { letter ->
+                val enabled = firstIndex.containsKey(letter)
+                Text(
+                    text = letter,
+                    fontSize = 9.sp,
+                    lineHeight = 9.sp,
+                    modifier = Modifier
+                        .alpha(if (enabled) 1f else 0.28f)
+                        .clickable(enabled = enabled) { firstIndex[letter]?.let(onBookIndex) }
+                        .padding(horizontal = 5.dp),
+                )
+            }
         }
+
+        Text(
+            text = "↓",
+            fontSize = 18.sp,
+            lineHeight = 20.sp,
+            modifier = Modifier.clickable(onClick = onBottom).padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
