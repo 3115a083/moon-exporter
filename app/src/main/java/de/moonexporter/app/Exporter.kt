@@ -21,7 +21,12 @@ internal object Exporter {
     ) = withContext(Dispatchers.IO) {
         if (mode == ExportMode.FULL) {
             val result = ReadestDirectExporter.export(context, targetTree, books, normalizeReadestNames, onProgress)
-            val warningSuffix = if (result.skipped > 0) tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped") else ""
+            onProgress(ExportProgress(tr("100%-Bücher als beendet markieren…", "Marking 100% books as finished…"), 0.99f))
+            val statusResult = ReadestLibraryStatus.markFinished(context, targetTree, books)
+            val warningSuffix = buildString {
+                if (result.skipped > 0) append(tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped"))
+                if (statusResult.ambiguous > 0) append(tr(" · ${statusResult.ambiguous} Beendet-Status nicht eindeutig zuordenbar", " · ${statusResult.ambiguous} finished statuses could not be matched uniquely"))
+            }
             onProgress(ExportProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"), 1f))
             return@withContext
         }
