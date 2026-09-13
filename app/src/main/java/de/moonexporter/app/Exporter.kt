@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.InputStream
+import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 
 internal object Exporter {
@@ -16,13 +16,19 @@ internal object Exporter {
         books: List<BookItem>,
         mode: ExportMode,
         includeDiagnostics: Boolean,
+        normalizeReadestNames: Boolean = true,
         onProgress: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
+        if (mode == ExportMode.FULL) {
+            val result = ReadestDirectExporter.export(context, targetTree, books, normalizeReadestNames, onProgress)
+            val warningSuffix = if (result.skipped > 0) tr(" · ${result.skipped} übersprungen", " · ${result.skipped} skipped") else ""
+            onProgress(tr("Readest-Direktexport abgeschlossen: ${result.exported} Bücher$warningSuffix", "Readest direct export complete: ${result.exported} books$warningSuffix"))
+            return@withContext
+        }
+
         val root = DocumentFile.fromTreeUri(context, targetTree) ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
         val created = mutableListOf<DocumentFile>()
         try {
-            val readme = createUnique(root, "README-Moon-Exporter.txt", "text/plain").also(created::add)
-            writeText(context, readme, readmeText())
             books.forEachIndexed { index, book ->
                 coroutineContext.ensureActive()
                 onProgress(tr("Export ${index + 1}/${books.size}: ${book.title}", "Export ${index + 1}/${books.size}: ${book.title}"))
@@ -30,7 +36,6 @@ internal object Exporter {
                     val file = createUnique(root, "${safeName(book.title)}.mrexpt", "text/plain").also(created::add)
                     writeText(context, file, mrexptFor(book))
                 }
-                if (mode == ExportMode.FULL) exportBook(context, root, book, created)
             }
             if (includeDiagnostics) {
                 val diagnostic = createUnique(root, "moon-exporter-diagnostic.json", "application/json").also(created::add)
@@ -42,19 +47,24 @@ internal object Exporter {
         }
     }
 
-    private fun exportBook(context: Context, root: DocumentFile, book: BookItem, created: MutableList<DocumentFile>) {
-        val match = book.epub ?: return
-        val source: InputStream = when {
-            match.uri != null -> context.contentResolver.openInputStream(match.uri) ?: return
-            match.embeddedPath != null -> File(match.embeddedPath).takeIf { it.isFile }?.inputStream() ?: return
-            else -> return
-        }
-        source.use { input ->
-            val extension = match.fileName.substringAfterLast('.', book.extension).ifBlank { book.extension }
-            val target = createUnique(root, "${safeName(book.title)}.$extension", mimeFor(extension)).also(created::add)
-            context.contentResolver.openOutputStream(target.uri, "w")?.use { output -> input.copyTo(output, 64 * 1024) }
-                ?: error(tr("Zieldatei konnte nicht geöffnet werden", "Could not open target file"))
-        }
+    private fun copyArchiveEntry(context: Context, backupUri: android.net.Uri, archiveEntryName: String, output: java.io.OutputStream) {
+        val wanted = archiveEntryName.replace('\\', '/').trimStart('/')
+        var found = false
+        context.contentResolver.openInputStream(backupUri)?.use { raw ->
+            ZipInputStream(raw.buffered()).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (entry.isDirectory) continue
+                    val clean = entry.name.replace('\\', '/').trimStart('/')
+                    if (clean == wanted) {
+                        zip.copyTo(output, 64 * 1024)
+                        found = true
+                        break
+                    }
+                }
+            }
+        } ?: error(tr("Backup konnte nicht erneut geöffnet werden", "Could not reopen backup"))
+        if (!found) error(tr("Buchdatei wurde im Backup nicht wiedergefunden", "Book file was not found again in the backup"))
     }
 
     internal fun mrexptFor(book: BookItem): String {
@@ -101,12 +111,6 @@ internal object Exporter {
             ?: error(tr("Datei konnte nicht geschrieben werden", "Could not write file"))
     }
 
-    private fun mimeFor(extension: String): String = when (extension.lowercase()) {
-        "epub" -> "application/epub+zip"
-        "pdf" -> "application/pdf"
-        else -> "application/octet-stream"
-    }
-
     private fun diagnosticJson(books: List<BookItem>, mode: ExportMode): String = buildString {
         append("{\n  \"format\":\"moon-exporter-diagnostic\",\n  \"mode\":${mode.name.jsonEscape()},\n  \"books\":[\n")
         books.forEachIndexed { index, b ->
@@ -115,18 +119,4 @@ internal object Exporter {
         }
         append("\n  ]\n}\n")
     }
-
-    private fun readmeText(): String = """
-Moon Exporter
-
-DEUTSCH
-Readest: Buch in Readest öffnen, Annotationen importieren, Moon+ Reader wählen und die passende .mrexpt-Datei auswählen.
-Der aktuelle Lesefortschritt wird nicht durch .mrexpt übertragen. Dafür kann Moon Exporter optional KOSync oder Calibre-Web Automated verwenden.
-Bei KOSync/CWA wird niemals die E-Book-Datei hochgeladen. Übertragen werden nur Dokument-ID (partialMD5) und Fortschrittsdaten.
-
-ENGLISH
-Readest: open the book in Readest, choose annotation import, select Moon+ Reader and pick the matching .mrexpt file.
-Current reading progress is not carried by .mrexpt. Moon Exporter can optionally send progress through KOSync or Calibre-Web Automated.
-KOSync/CWA never uploads the ebook file. Only the document id (partialMD5) and reading progress are sent.
-""".trimIndent()
 }
