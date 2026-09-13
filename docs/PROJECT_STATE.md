@@ -15,44 +15,47 @@ WebDAV remains deferred until this local flow is reliable.
 
 ## Current revision
 - Repository: `3115a083/moon-exporter`
-- Branch: `revision/1.0.9-readest-speed-annotations`
-- PR: #21, open and not merged
-- Version: `1.0.9`, versionCode 11
-- Tested app-code head: `a2c0e95c83a18b23ce15bd9a3f555761e47c49fe`
+- Branch: `revision/1.0.10-readest-highlights-finished`
+- PR: #23, open and not merged
+- Version: `1.0.10`, versionCode 12
+- Tested app-code head: `05211c62d5600cbdd6d87b078b87787264a713df`
 - minSdk 26, targetSdk 35, compileSdk 35
-- Android CI run `34763052900`: success
-- CodeQL run `34763052880`: success
-- Debug artifact: `MoonExporter-1.0.9-debug`, artifact ID `10319672483`
-- Verified APK SHA256: `1ef495695eac655e89a55a4ef75d4d79601320e0854716c8266cff9fa260fc79`
-- Documentation commits after the tested head do not change app code.
+- Android CI run `34765408400`: success
+- CodeQL run `34765408386`: success
+- Debug artifact: `MoonExporter-1.0.10-debug`, artifact ID `10320725510`
+- Verified APK SHA256: `85f5119185ba07e6ec031d67dd286912c617caffcfd23eecc38907a4f30ea5fc`
+- Documentation commits after the tested app-code head do not change app behavior.
 
-## 1.0.9 Readest export performance
-- A book embedded in `.mrpro` is prepared from the source only once per export. Hashing, EPUB metadata inspection, highlight resolution and target copying reuse the same temporary local book file.
-- This removes the 1.0.8 behavior that could rescan a large `.mrpro` from the beginning multiple times for one book.
-- Temporary ebook files are deleted immediately in `finally`; no durable ebook cache is introduced.
-- Book copy uses larger buffered I/O.
-- Highlight resolution reuses one open EPUB ZIP per book.
+## 1.0.10 Readest highlight fix
+1.0.9 generated no direct Readest annotations on the user's real test book. The likely failure path was strict XML parsing of EPUB XHTML. Real EPUB content can contain browser-tolerated entities or markup that Readest accepts but a strict Java XML DOM parser rejects.
 
-## 1.0.9 export progress UI
-- The local export progress bar is no longer shown in the backup-analysis card.
-- A dedicated bottom section `4. Exportfortschritt` shows a determinate bar and current detailed phase.
-- Direct Readest export reports seven stages per book: prepare source, calculate Readest ID, inspect EPUB, resolve highlights, copy ebook, write config, update library.
-- The A-Z rail down arrow reaches the actual final list item including the progress section.
+1.0.10 behavior:
+- EPUB content documents are parsed with bounded tolerant Jsoup XHTML/XML parsing with HTML fallback.
+- Readest/Foliate CFI child-node indexing is still reproduced for exact range CFIs.
+- Highlight text matching normalizes non-breaking spaces, smart quotes, dash variants and soft hyphens while final CFI offsets still refer to actual source DOM text nodes.
+- Moon+ chapter data remains the preferred spine hint.
+- If a text cannot be resolved safely, no direct Readest annotation position is invented. The original annotation remains in `moon-export.mrexpt`.
+- Native/unrelated Readest notes remain preserved.
+- Unit coverage includes real-world-like XHTML using `&nbsp;` plus inline markup inside a highlight.
+- Readest annotation `cfi` is the required anchor; `xpointer0`/`xpointer1` remain optional and are not fabricated.
 
-## 1.0.9 exact Readest highlights
-1.0.8 wrote only chapter-start CFIs for direct annotations. Readest could list these notes but could not paint the selected text and clicking the note navigated only to the chapter start.
+## 1.0.10 finished status
+Readest has a separate library reading status. A progress tuple of `[100,100]` alone is not equivalent to a finished book.
 
-1.0.9 behavior:
-- `ReadestCfiResolver` resolves `AnnotationRecord.original` against actual EPUB XHTML.
-- Moon+ chapter data chooses the preferred EPUB spine section.
-- Readest/Foliate child-node indexing semantics are reproduced for text chunks, virtual nodes, `cfi-inert`, `cfi-skip`, and text offsets.
-- A successful match produces a real EPUB CFI range with start/end offsets.
-- If identical text occurs multiple times, Moon+ source position is used to prefer the closest occurrence.
-- No direct Readest note is generated if the text cannot be resolved safely. The annotation remains losslessly in `moon-export.mrexpt`.
-- Old Moon Exporter-generated notes with the same stable IDs are replaced on re-export so incorrect 1.0.8 chapter-start entries do not remain alongside corrected notes.
-- Native/unrelated Readest notes are preserved.
-- XHTML parsing is bounded and external XML entities/DTDs are disabled.
-- A synthetic EPUB unit test verifies an exact range CFI rather than chapter-only CFI.
+1.0.10 behavior:
+- An explicit Moon+ reading percentage of 100% maps to Readest `readingStatus: "finished"`.
+- `readingStatusUpdatedAt` is written using the Moon timestamp when available, otherwise the export time.
+- Matching against the just-written Readest library uses ISBN first, then unique normalized title/author.
+- Ambiguous matches are not guessed and are reported in the final export status.
+- This status pass does not reopen or rehash the ebook, preserving the 1.0.9 performance improvement.
+
+## 1.0.9 retained export performance and progress UI
+- A book embedded in `.mrpro` is prepared from the source only once per export.
+- Hashing, EPUB metadata inspection, highlight resolution and target copying reuse one temporary local book file.
+- Temporary ebook files are deleted immediately after each book.
+- Book copying uses buffered I/O and one open EPUB ZIP is reused during highlight resolution.
+- The dedicated bottom section `4. Exportfortschritt` shows determinate progress and named phases for every book.
+- The A-Z rail down arrow reaches the bottom progress section.
 
 ## Direct Readest structure
 - `Readest/Books/library.json` is the local library index.
@@ -83,14 +86,6 @@ WebDAV remains deferred until this local flow is reliable.
 - HTTP is allowed only for private/local home-network targets; public cleartext HTTP remains blocked.
 - Never invent KOReader XPointer values.
 
-## UI retained behavior
-- Whole book cards toggle selection.
-- Missing target ebook can be assigned manually through SAF without losing recovered Moon+ progress.
-- A-Z fast rail is tappable/draggable and has top/bottom arrows.
-- Filters include `Ohne Buchdatei`.
-- Analysis runs as a non-exported foreground `dataSync` service with notification progress.
-- System bars remain inset-safe and readable.
-
 ## Security and privacy
 - No telemetry, analytics, ads or cloud crash reporting.
 - No real user backup, Readest or ebook data in source, tests, logs or CI artifacts.
@@ -100,8 +95,8 @@ WebDAV remains deferred until this local flow is reliable.
 - Temporary export ebooks must be removed after use.
 
 ## Still incomplete / next priorities
-1. Real-device test 1.0.9 against the same book used for 1.0.8, measuring export time and checking visible/clickable highlights.
-2. Count and surface unresolved real annotations when XHTML/text differs from Moon+ source data; never invent a position.
+1. Real-device test 1.0.10 against the same book: verify visible highlights, exact click navigation and `finished` status for 100%.
+2. If real highlights still fail, surface safe per-book resolved/unresolved annotation counts without logging book text or paths.
 3. Improve exact Readest reading-resume translation beyond percentage/chapter fallback.
 4. Add explicit position-quality model `EXACT`, `FALLBACK`, `UNRESOLVED` in data model/UI.
 5. Harden CWA/BookLore/generic KOSync real error handling and per-book results.
