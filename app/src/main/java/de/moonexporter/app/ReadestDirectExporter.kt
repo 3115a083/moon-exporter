@@ -43,6 +43,7 @@ internal object ReadestDirectExporter {
         context: Context,
         targetTree: Uri,
         books: List<BookItem>,
+        normalizeBookNames: Boolean,
         onProgress: (String) -> Unit,
     ): Result = withContext(Dispatchers.IO) {
         val selectedRoot = DocumentFile.fromTreeUri(context, targetTree)
@@ -91,7 +92,9 @@ internal object ReadestDirectExporter {
 
             val readestHash = openBookSource(context, source) { readestPartialMd5(it) }
             val epubInfo = if (ext == "epub") openBookSource(context, source) { inspectEpub(it) } else EpubInfo()
-            val title = epubInfo.title?.takeIf { it.isNotBlank() } ?: book.title
+            val reconstructedTitle = epubInfo.title?.takeIf { it.isNotBlank() && !ProgressRecovery.looksOpaque(it) }
+                ?: book.title.takeIf { it.isNotBlank() && !ProgressRecovery.looksOpaque(it) }
+            val title = reconstructedTitle ?: book.title
             val authors = epubInfo.authors.ifEmpty { listOfNotNull(book.author?.takeIf { it.isNotBlank() }) }
             val identifiers = epubInfo.identifiers.ifEmpty { listOfNotNull(book.isbn?.takeIf { it.isNotBlank() }) }
             val metaHash = metadataHash(title, authors, identifiers)
@@ -104,7 +107,10 @@ internal object ReadestDirectExporter {
                 it.isFile && it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in setOf("epub", "pdf")
             }
             if (existingBook == null) {
-                val targetName = "${safeName(title)}.$ext"
+                val sourceBase = source.fileName.substringBeforeLast('.', source.fileName)
+                val normalizedBase = reconstructedTitle?.let(::safeName)
+                val targetBase = if (normalizeBookNames && !normalizedBase.isNullOrBlank()) normalizedBase else safeName(sourceBase)
+                val targetName = "$targetBase.$ext"
                 val targetBook = dir.createFile(mimeFor(ext), targetName)
                     ?: error(tr("Readest-Buchdatei konnte nicht angelegt werden", "Could not create Readest book file"))
                 context.contentResolver.openOutputStream(targetBook.uri, "w")?.use { output ->
@@ -156,19 +162,19 @@ internal object ReadestDirectExporter {
         now: Long,
         existed: Boolean,
     ): Int {
+        val previousUpdatedAt = config.optLong("updatedAt", 0L)
         config.put("schemaVersion", maxOf(CONFIG_SCHEMA_VERSION, config.optInt("schemaVersion", 0)))
         config.put("bookHash", bookHash)
         config.put("metaHash", metaHash)
-        config.put("updatedAt", now)
         if (!config.has("viewSettings")) config.put("viewSettings", JSONObject())
         if (!config.has("searchConfig")) config.put("searchConfig", JSONObject())
 
         book.position?.percent?.let { percent ->
             val moonTimestamp = book.position.timestampMs
-            val targetTimestamp = config.optLong("updatedAt", 0L)
-            val shouldReplace = !existed || !config.has("progress") || (moonTimestamp != null && moonTimestamp > targetTimestamp)
+            val shouldReplace = !existed || !config.has("progress") || (moonTimestamp != null && moonTimestamp > previousUpdatedAt)
             if (shouldReplace) config.put("progress", progressPair(percent))
         }
+        config.put("updatedAt", now)
 
         val existing = config.optJSONArray("booknotes") ?: JSONArray()
         val knownIds = mutableSetOf<String>()
@@ -341,7 +347,6 @@ internal object ReadestDirectExporter {
         val pathToSpine = spinePaths.mapIndexed { index, path -> normalizeHref(path) to index }.toMap()
 
         val navHrefs = mutableListOf<String>()
-        val opfDir = opfPath.substringBeforeLast('/', "")
         texts.entries.firstOrNull { it.key.endsWith(".ncx", true) }?.let { entry ->
             Regex("<content\\b[^>]*\\bsrc\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
                 .findAll(entry.value).forEach { navHrefs += resolvePath(entry.key, it.groupValues[1]) }
