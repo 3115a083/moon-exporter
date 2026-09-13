@@ -114,6 +114,7 @@ class ExportService : Service() {
 
                         store.setItemState(item.id, "RUNNING", knownHash)
                         val before = ReadestTargetAudit.snapshot(this@ExportService, session.targetUri)
+                        val attemptStartedAt = System.currentTimeMillis()
                         try {
                             ReadestDirectExporter.export(this@ExportService, session.targetUri, listOf(item.book), session.normalizeNames) { p ->
                                 val base = done.toFloat() / items.size
@@ -122,11 +123,12 @@ class ExportService : Service() {
                                 notifyProgress(p.message, done, items.size)
                             }
                             val newHash = ReadestTargetAudit.discoverSingleNewHash(before, this@ExportService, session.targetUri)
-                            val libraryHash = if (newHash == null && knownHash == null) ReadestTargetAudit.findLikelyHash(this@ExportService, session.targetUri, item.book) else null
-                            val sourceHash = if (newHash == null && knownHash == null && libraryHash == null) {
+                            val recentHash = ReadestTargetAudit.findRecentlyCommittedHash(this@ExportService, session.targetUri, attemptStartedAt)
+                            val libraryHash = if (newHash == null && knownHash == null && recentHash == null) ReadestTargetAudit.findLikelyHash(this@ExportService, session.targetUri, item.book) else null
+                            val sourceHash = if (newHash == null && knownHash == null && recentHash == null && libraryHash == null) {
                                 item.book.epub?.let { ReadestIdentity.sourceHash(this@ExportService, it) }
                             } else null
-                            knownHash = ReadestIdentity.chooseHash(newHash, knownHash, libraryHash, sourceHash)
+                            knownHash = newHash ?: knownHash ?: recentHash ?: libraryHash ?: sourceHash
                             val validation = knownHash?.let { ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, it, item.book.epub?.size) }
                             if (knownHash != null && validation?.complete == true) {
                                 store.setItemState(item.id, "DONE", knownHash)
@@ -136,15 +138,21 @@ class ExportService : Service() {
                                 committed = true
                                 break
                             }
-                            lastFailure = IllegalStateException(validation?.reason ?: tr("Readest-Ziel konnte nach dem Export nicht eindeutig validiert werden", "Readest target could not be validated after export"))
+                            lastFailure = IllegalStateException(
+                                validation?.reason ?: tr(
+                                    "Export wurde geschrieben, aber der zugehörige Readest-Buchordner konnte nicht bestimmt werden. Neuer Ordner: ${newHash ?: "nein"}; aktualisierter config/library-Eintrag: ${recentHash ?: "nein"}; Metadaten-Treffer: ${libraryHash ?: "nein"}; Quellhash: ${sourceHash ?: "nicht verfügbar"}",
+                                    "Export was written, but its Readest book folder could not be identified. New folder: ${newHash ?: "no"}; updated config/library entry: ${recentHash ?: "no"}; metadata match: ${libraryHash ?: "no"}; source hash: ${sourceHash ?: "unavailable"}",
+                                )
+                            )
                         } catch (t: Throwable) {
                             if (t is CancellationException) throw t
                             val newHash = ReadestTargetAudit.discoverSingleNewHash(before, this@ExportService, session.targetUri)
-                            val libraryHash = if (newHash == null && knownHash == null) ReadestTargetAudit.findLikelyHash(this@ExportService, session.targetUri, item.book) else null
-                            val sourceHash = if (newHash == null && knownHash == null && libraryHash == null) {
+                            val recentHash = ReadestTargetAudit.findRecentlyCommittedHash(this@ExportService, session.targetUri, attemptStartedAt)
+                            val libraryHash = if (newHash == null && knownHash == null && recentHash == null) ReadestTargetAudit.findLikelyHash(this@ExportService, session.targetUri, item.book) else null
+                            val sourceHash = if (newHash == null && knownHash == null && recentHash == null && libraryHash == null) {
                                 item.book.epub?.let { ReadestIdentity.sourceHash(this@ExportService, it) }
                             } else null
-                            knownHash = ReadestIdentity.chooseHash(newHash, knownHash, libraryHash, sourceHash)
+                            knownHash = newHash ?: knownHash ?: recentHash ?: libraryHash ?: sourceHash
                             lastFailure = t
                         }
                         store.setItemState(item.id, "INTERRUPTED", knownHash, lastFailure?.message)
