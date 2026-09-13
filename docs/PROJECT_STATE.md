@@ -15,54 +15,46 @@ WebDAV remains deferred until the local backup, Readest and KOSync paths are rel
 
 ## Current revision
 - Repository: `3115a083/moon-exporter`
-- Branch: `revision/1.0.12-readest-validation`
-- PR: #26, open and not merged
-- Version: `1.0.12`, versionCode 14
-- Tested app-code head: `774b86f116288c89d8a76d273a206ea9531846f5`
-- Android CI run `34773493180`: success, including privacy scan, unit tests, lint, debug APK, manifest/permission audit and artifact upload
-- CodeQL run `34773493256`: success
-- Debug artifact: `MoonExporter-1.0.12-debug`, artifact ID `10323056571`
-- Artifact ZIP digest: `sha256:4b4c21620f52c96b732cc5c0e1c18bd43d23e6374671ae16c45d7d6127b3db96`
-- Verified APK SHA256: `214b13021cf72a724c471ffe7b63a804410aa750aed65e4d84c9ebbb96ab0e9e`
+- Branch: `revision/1.0.13-export-result-hash`
+- PR: #27, open and not merged
+- Version: `1.0.13`, versionCode 15
+- Tested app-code head: `6918cfdc6483069b5742e0aa28cf6d8fe413af25`
+- Android CI run `34775655809`: success, including privacy scan, unit tests, lint, debug APK, manifest/permission audit and artifact upload
+- CodeQL run `34775655830`: success
+- Debug artifact: `MoonExporter-1.0.13-debug`, artifact ID `10323835806`
+- Artifact ZIP digest: `sha256:a51d0ab9b32034224a92915f62724be6adeb1daf7ac1df24a2d538260e7c0f5b`
+- Verified APK SHA256: `6a548c315d87a6b355c902bed1768c03f99ba7a5fcf1826f2d6db514fd855306`
 
-## 1.0.12 Readest target validation fix
-Real-device feedback from 1.0.11 produced `Readest-Ziel konnte nach dem Export nicht eindeutig validiert werden` although the copy itself could already be correct.
+## 1.0.13 deterministic Readest validation
+Real-device feedback showed that 1.0.12 could still report `Readest-Ziel konnte nach dem Export nicht eindeutig validiert werden`.
 
-Root cause:
-- `ReadestDirectExporter` calculates the exact Readest book hash while exporting.
-- `ExportService` did not retain that exact identity.
-- If the corresponding hash folder already existed before the current attempt, `discoverSingleNewHash()` correctly found no newly-created folder.
-- Metadata lookup by title/ISBN can legitimately fail or be ambiguous.
-- The service then had no hash to validate and reported the generic validation error.
+Binding behavior:
+- Before writing a book, `ExportService` calculates the exact Readest partialMD5 from the persisted source ebook.
+- That expected hash is stored in the transfer item immediately and remains the authoritative target identity for the whole book transaction.
+- Post-export validation no longer tries to rediscover the book that was just written. It validates exactly the expected hash folder.
+- If the source hash cannot be calculated before writing, the export stops before target modification and reports a specific source-identity error.
+- If strict validation fails, the UI reports the exact failed target check and book title instead of the former generic ambiguity message.
+- Strict checks remain unchanged: ebook exists, optional known size matches, recomputed Readest partialMD5 matches the hash folder, `config.json` is valid, `library.json` is valid and contains the matching hash row.
+- No validation rule is weakened and no title/ISBN guess is used to commit the just-exported book.
 
-1.0.12 behavior:
-- Existing fast identity paths remain first: newly-created hash, persisted known hash, unambiguous library metadata match.
-- If all of those are unavailable, `ReadestIdentity` calculates the exact Readest partialMD5 from the original source ebook.
-- For embedded `.mrpro` books this fallback reopens only the required archive entry and uses a temporary app-cache file that is deleted immediately.
-- The exact source hash is used only to identify the target folder. All strict 1.0.11 checks still run afterwards.
-- The same fallback is used in normal post-export validation and interrupted-export recovery.
-- No validation rule was weakened and no title-only guess is accepted as proof of book identity.
-- Regression tests verify that the exact source hash is selected when a valid existing target was not newly created and metadata lookup cannot identify it.
-
-## 1.0.11 retained reliability behavior
-- Direct Readest library export runs in a dedicated non-exported foreground `dataSync` service and is not owned by the Activity coroutine.
+## Retained resumable export behavior
+- Direct Readest export runs in a dedicated non-exported foreground `dataSync` service.
 - `START_REDELIVER_INTENT` plus app-start recovery resumes unfinished sessions.
 - Transfer sessions and per-book checkpoints live in app-private SQLite.
-- A book becomes `DONE` only after ebook, `config.json` and `library.json` row validate together.
-- A completed checkpoint is revalidated at the target before it is skipped.
+- A book becomes `DONE` only after target validation succeeds.
+- Completed checkpoints are revalidated before being skipped.
 - Changed Moon+ progress/annotations/source metadata changes the fingerprint and forces reprocessing.
 - Partial/wrong ebook files are rejected by known size/hash checks and rebuilt.
 - Corrupt `config.json`/`library.json` can be restored from recovery backups or rebuilt after interrupted first creation.
 - Each failed book gets one immediate repair retry before the session remains interrupted.
 - Recovery `.bak.json` and Moon Exporter `.part` files are removed after a fully verified session.
-- The last completed `.mrpro` analysis is cached app-privately and reused only while URI/size/lastModified remain unchanged.
+- Last completed `.mrpro` analysis is cached app-privately and reused only while URI/size/lastModified remain unchanged.
 - App-private DB/cache state disappears on uninstall.
 
 ## Readest integrity rules
 - `Readest/Books/library.json` is the local library index.
 - Managed books live under `Readest/Books/<Readest bookHash>/`.
 - Readest bookHash uses Readest partialMD5 and is distinct from KOReader/KOSync partialMD5.
-- Target validation checks folder hash, EPUB/PDF existence, size when known, recomputed Readest hash, valid `config.json`, valid `library.json`, and matching library row.
 - Native/unrelated Readest files and rows are never guessed or deleted.
 - `nav.json` is derived by Readest and is not fabricated.
 - `moon-export.mrexpt` is an intentional lossless annotation fallback, not a temporary artifact.
@@ -76,4 +68,4 @@ Root cause:
 - Android cannot guarantee a final external SAF cleanup callback if uninstall happens exactly during a write. External writes must therefore remain detectable and repairable rather than relying on uninstall cleanup.
 
 ## Development rule
-Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #26 is authoritative for 1.0.12 and must not be merged without explicit user approval.
+Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #27 is authoritative for 1.0.13 and must not be merged without explicit user approval.
