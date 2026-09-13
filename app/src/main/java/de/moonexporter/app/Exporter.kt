@@ -29,7 +29,13 @@ internal object Exporter {
             val pending = store.latestUnfinishedSession()
             val sessionId = when {
                 pending == null -> store.createSession(targetTree, normalizeReadestNames, books)
-                pending.targetUri == targetTree -> pending.id
+                pending.targetUri == targetTree -> {
+                    // A manual retry must use the current analysis/selection rather than a stale
+                    // payload from an older interrupted app version. Successfully committed books
+                    // remain available through completed_books and are revalidated by ExportService.
+                    store.setSessionStatus(pending.id, "SUPERSEDED")
+                    store.createSession(targetTree, normalizeReadestNames, books)
+                }
                 else -> {
                     store.close()
                     error(tr("Es existiert noch ein unterbrochener Readest-Export für ein anderes Ziel. Öffne die App erneut mit Zugriff auf dieses Ziel oder beende/repariere zuerst diesen Auftrag.", "An interrupted Readest export for another target still exists. Resume or repair it before starting a different target."))
