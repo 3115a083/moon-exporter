@@ -50,13 +50,37 @@ internal object KoSyncClient {
         val trimmed = raw.trim().trimEnd('/')
         require(trimmed.isNotBlank()) { tr("Server-URL fehlt", "Server URL is missing") }
         val uri = URI(trimmed)
-        require(uri.scheme.equals("https", true)) { tr("Nur HTTPS ist erlaubt", "HTTPS is required") }
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+        require(scheme == "https" || scheme == "http") { tr("Server-URL muss HTTP oder HTTPS verwenden", "Server URL must use HTTP or HTTPS") }
         require(!uri.host.isNullOrBlank()) { tr("Ungültige Server-URL", "Invalid server URL") }
+        if (scheme == "http") {
+            require(isLocalNetworkHost(uri.host)) {
+                tr(
+                    "HTTP ist nur für lokale Heimnetz-Adressen erlaubt. Für öffentliche Server ist HTTPS erforderlich.",
+                    "HTTP is only allowed for local-network addresses. Public servers require HTTPS.",
+                )
+            }
+        }
         return when (type) {
             ServerType.CALIBRE_WEB_AUTOMATED -> if (trimmed.endsWith("/kosync", true)) trimmed.dropLast(7).trimEnd('/') else trimmed
             ServerType.BOOKLORE -> if (trimmed.endsWith("/api/koreader", true)) trimmed.dropLast(13).trimEnd('/') else trimmed
             ServerType.STANDARD_KOSYNC -> trimmed
         }
+    }
+
+    internal fun isLocalNetworkHost(host: String): Boolean {
+        val normalized = host.trim().trim('[', ']').lowercase(Locale.ROOT)
+        if (normalized == "localhost" || normalized.endsWith(".local")) return true
+        if (!normalized.contains('.') && !normalized.contains(':')) return true
+        val ipv4 = normalized.split('.').mapNotNull { it.toIntOrNull() }
+        if (ipv4.size == 4 && ipv4.all { it in 0..255 }) {
+            return ipv4[0] == 10 ||
+                ipv4[0] == 127 ||
+                (ipv4[0] == 172 && ipv4[1] in 16..31) ||
+                (ipv4[0] == 192 && ipv4[1] == 168) ||
+                (ipv4[0] == 169 && ipv4[1] == 254)
+        }
+        return normalized == "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
     }
 
     internal fun endpointRoot(config: SyncConfig): String {
