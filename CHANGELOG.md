@@ -2,6 +2,26 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase. Older entries are intentionally concise; `docs/PROJECT_STATE.md` and the private handoff contain the current binding implementation rules.
 
+## 1.0.14 - 2026-09-13
+
+### Stale checkpoint replacement
+- Fixed the real-device error `Keine Buchdatei für <Titel> gespeichert` after upgrading from older resumable-export revisions.
+- Root cause: an explicit export to the same Readest target reused an older unfinished SQLite session verbatim. That stale session could contain an old `BookItem` payload with `epub = null`, even though the current analysis/UI had already recovered or reassigned the actual ebook source.
+- An explicit user-started export for the same target now marks the old unfinished session `SUPERSEDED` and creates a fresh session from the books currently selected in the UI.
+- Automatic service/process recovery still resumes the persisted unfinished session directly. Only a conscious new export replaces stale checkpoints.
+- `completed_books` remains in use, so already verified books with the same fingerprint can still be skipped safely in the fresh session.
+- An unfinished session for a different target still blocks a new target to avoid cross-target ambiguity.
+- Added regression tests for explicit same-target replacement, different-target blocking, and no-pending-session creation.
+- Bumped to versionCode 16 / versionName 1.0.14.
+
+### Verification
+- Tested app-code head: `eff6cf1153aae36e58406f053c871bdfd78df0f2`.
+- Android CI run `34780675107`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34780675110`: success.
+- Debug artifact: `MoonExporter-1.0.14-debug`, artifact ID `10324742763`.
+- Artifact ZIP digest: `sha256:74d991d5928cc726302a7ad1763a6bf41c2f6b4486723cc05a6ff2cbc7b60766`.
+- APK SHA256: `ebb2427a44b65a8adb7f6b2100a0bd9f071322eee1ab373c9eb6a641c5d3bdf5`.
+
 ## 1.0.13 - 2026-09-13
 
 ### Deterministic Readest validation
