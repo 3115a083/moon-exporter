@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -97,10 +98,12 @@ private fun MoonExporterApp(context: Context) {
     var serverUrl by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var connectionFeedback by remember { mutableStateOf<String?>(null) }
     var pendingBookKey by remember { mutableStateOf<String?>(null) }
     var lastSession by remember { mutableStateOf(0L) }
     var lastRevision by remember { mutableStateOf(-1) }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val busy = localBusy || analysis.running
 
     fun setBooks(newBooks: List<BookItem>, resetSelection: Boolean = true) {
@@ -225,96 +228,127 @@ private fun MoonExporterApp(context: Context) {
 
     MaterialTheme(colorScheme = lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp),
-            ) {
-                item {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Moon Exporter", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                            Text(tr("Moon+ Lesefortschritt und Markierungen übertragen", "Transfer Moon+ reading progress and highlights"), style = MaterialTheme.typography.bodySmall)
-                        }
-                        if (busy) TextButton(onClick = {
-                            if (analysis.running) {
-                                context.startService(Intent(context, AnalysisService::class.java).setAction(AnalysisService.ACTION_CANCEL))
-                            } else activeJob?.cancel()
-                        }) { Text(tr("Abbrechen", "Cancel")) }
-                    }
-                }
-
-                item {
-                    StepCard("1", tr("Backup analysieren", "Analyze backup")) {
-                        Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                            Text(tr("Moon+ Backup-Datei auswählen", "Choose Moon+ backup file"))
-                        }
-                        TextButton(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Alternativ Moon+ Ordner verwenden", "Use Moon+ folder instead")) }
-                        if (analysis.running || localBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Text(status, style = MaterialTheme.typography.bodySmall)
-                        if (analysis.running) Text(tr("Die Analyse läuft als Android-Hintergrundaufgabe weiter. Der Fortschritt ist auch in der Benachrichtigung sichtbar.", "Analysis continues as an Android foreground task. Progress is also visible in the notification."), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-
-                item {
-                    StepCard("2", tr("Bücher prüfen und auswählen", "Review and select books")) {
-                        if (books.isEmpty()) {
-                            Text(
-                                if (analysis.running) tr("Die Buchliste erscheint nach der Datenauswertung. Du kannst bereits zu Schritt 3 scrollen und das Ziel konfigurieren.", "The book list appears after data extraction. You can already scroll to step 3 and configure the destination.")
-                                else tr("Noch keine Bücher analysiert. Nach dem Import werden hier alle erkannten Bücher mit Fortschritt und Berechnungsart angezeigt.", "No books analyzed yet. Detected books will appear here with progress and calculation method."),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        } else {
-                            Text(tr("$selectedCount von ${books.size} ausgewählt · $selectedWithProgress mit Fortschritt · $selectedWithMarks mit Markierungen", "$selectedCount of ${books.size} selected · $selectedWithProgress with progress · $selectedWithMarks with highlights"), style = MaterialTheme.typography.bodySmall)
-                            FilterDropdown(filter) { filter = it }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = true } }, modifier = Modifier.weight(1f)) { Text(tr("Sichtbare wählen", "Select visible")) }
-                                OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = false } }, modifier = Modifier.weight(1f)) { Text(tr("Abwählen", "Deselect")) }
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(start = 12.dp, end = if (visibleBooks.isNotEmpty()) 40.dp else 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp),
+                ) {
+                    item {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Moon Exporter", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                                Text(tr("Moon+ Lesefortschritt und Markierungen übertragen", "Transfer Moon+ reading progress and highlights"), style = MaterialTheme.typography.bodySmall)
                             }
-                            if (missingBookFiles > 0) {
-                                Text(tr("$missingBookFiles ausgewählte Bücher haben Fortschritt, aber noch keine sichere Buchdatei für die Zielberechnung. Sie können direkt in der jeweiligen Buchkarte zugeordnet werden.", "$missingBookFiles selected books have progress but no reliable book file for target calculation. They can be matched directly in each book card."), style = MaterialTheme.typography.bodySmall)
-                                OutlinedButton(onClick = { multiBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }, enabled = !busy) {
-                                    Text(tr("Mehrere Buchdateien automatisch zuordnen", "Auto-match multiple book files"))
+                            if (busy) TextButton(onClick = {
+                                if (analysis.running) context.startService(Intent(context, AnalysisService::class.java).setAction(AnalysisService.ACTION_CANCEL))
+                                else activeJob?.cancel()
+                            }) { Text(tr("Abbrechen", "Cancel")) }
+                        }
+                    }
+
+                    item {
+                        StepCard("1", tr("Backup analysieren", "Analyze backup")) {
+                            Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                                Text(tr("Moon+ Backup-Datei auswählen", "Choose Moon+ backup file"))
+                            }
+                            TextButton(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Alternativ Moon+ Ordner verwenden", "Use Moon+ folder instead")) }
+                            if (analysis.running || localBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Text(status, style = MaterialTheme.typography.bodySmall)
+                            if (analysis.running) Text(tr("Die Analyse läuft als Android-Hintergrundaufgabe weiter. Der Fortschritt ist auch in der Benachrichtigung sichtbar.", "Analysis continues as an Android foreground task. Progress is also visible in the notification."), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    item {
+                        StepCard("2", tr("Bücher prüfen und auswählen", "Review and select books")) {
+                            if (books.isEmpty()) {
+                                Text(
+                                    if (analysis.running) tr("Die Buchliste erscheint nach der Datenauswertung. Du kannst bereits zu Schritt 3 scrollen und das Ziel konfigurieren.", "The book list appears after data extraction. You can already scroll to step 3 and configure the destination.")
+                                    else tr("Noch keine Bücher analysiert. Nach dem Import werden hier alle erkannten Bücher mit Fortschritt und Berechnungsart angezeigt.", "No books analyzed yet. Detected books will appear here with progress and calculation method."),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            } else {
+                                Text(tr("$selectedCount von ${books.size} ausgewählt · $selectedWithProgress mit Fortschritt · $selectedWithMarks mit Markierungen", "$selectedCount of ${books.size} selected · $selectedWithProgress with progress · $selectedWithMarks with highlights"), style = MaterialTheme.typography.bodySmall)
+                                Text(tr("Rechts kannst du den alphabetischen Balken ziehen oder einen Buchstaben antippen.", "Drag the alphabetical rail on the right or tap a letter."), style = MaterialTheme.typography.labelSmall)
+                                FilterDropdown(filter) { filter = it }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = true } }, modifier = Modifier.weight(1f)) { Text(tr("Sichtbare wählen", "Select visible")) }
+                                    OutlinedButton(onClick = { visibleBooks.forEach { selected[it.key] = false } }, modifier = Modifier.weight(1f)) { Text(tr("Abwählen", "Deselect")) }
+                                }
+                                if (missingBookFiles > 0) {
+                                    Text(tr("$missingBookFiles ausgewählte Bücher haben Fortschritt, aber noch keine sichere Buchdatei für die Zielberechnung. Sie können direkt in der jeweiligen Buchkarte zugeordnet werden.", "$missingBookFiles selected books have progress but no reliable book file for target calculation. They can be matched directly in each book card."), style = MaterialTheme.typography.bodySmall)
+                                    OutlinedButton(onClick = { multiBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }, enabled = !busy) {
+                                        Text(tr("Mehrere Buchdateien automatisch zuordnen", "Auto-match multiple book files"))
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                if (books.isNotEmpty()) items(visibleBooks, key = { it.key }) { book ->
-                    BookCard(
-                        book = book,
-                        checked = selected[book.key] == true,
-                        onChecked = { selected[book.key] = it },
-                        onChooseBook = {
-                            pendingBookKey = book.key
-                            singleBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
-                        },
-                    )
-                }
+                    if (books.isNotEmpty()) items(visibleBooks, key = { it.key }) { book ->
+                        BookCard(
+                            book = book,
+                            checked = selected[book.key] == true,
+                            onChecked = { selected[book.key] = it },
+                            onChooseBook = {
+                                pendingBookKey = book.key
+                                singleBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
+                            },
+                        )
+                    }
 
-                item {
-                    StepCard("3", tr("Ziel auswählen", "Choose destination")) {
-                        Text(tr("Exportziel", "Export destination"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                        TransferTarget.entries.forEach { option -> SelectionRow(target == option, targetLabel(option)) { target = option } }
-                        when (target) {
-                            TransferTarget.READEST -> ReadestTarget(exportMode, { exportMode = it }, enabled = !busy && selectedCount > 0) { exportPicker.launch(null) }
-                            else -> ServerTarget(
-                                target, serverUrl, { serverUrl = it }, username, { username = it }, password, { password = it }, busy, selectedCount > 0,
-                                onTest = {
-                                    val config = SyncConfig(serverType(target), serverUrl, username, password)
-                                    launchWork(tr("Verbindungstest abgebrochen", "Connection test cancelled")) { status = KoSyncClient.authenticate(config) }
-                                },
-                                onSend = {
-                                    val chosen = books.filter { selected[it.key] == true }
-                                    val config = SyncConfig(serverType(target), serverUrl, username, password)
-                                    launchWork(tr("Übertragung abgebrochen", "Transfer cancelled")) {
-                                        KoSyncClient.uploadProgress(config, chosen) { status = it }
-                                        status = tr("Lesefortschritt übertragen.", "Reading progress transferred.")
-                                    }
-                                },
-                            )
+                    item {
+                        StepCard("3", tr("Ziel auswählen", "Choose destination")) {
+                            Text(tr("Exportziel", "Export destination"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                            TransferTarget.entries.forEach { option -> SelectionRow(target == option, targetLabel(option)) { target = option; connectionFeedback = null } }
+                            when (target) {
+                                TransferTarget.READEST -> ReadestTarget(exportMode, { exportMode = it }, enabled = !busy && selectedCount > 0) { exportPicker.launch(null) }
+                                else -> ServerTarget(
+                                    target = target,
+                                    url = serverUrl,
+                                    setUrl = { serverUrl = it; connectionFeedback = null },
+                                    user = username,
+                                    setUser = { username = it; connectionFeedback = null },
+                                    password = password,
+                                    setPassword = { password = it; connectionFeedback = null },
+                                    busy = busy,
+                                    canSend = selectedCount > 0,
+                                    feedback = connectionFeedback,
+                                    onTest = {
+                                        val config = SyncConfig(serverType(target), serverUrl, username, password)
+                                        launchWork(tr("Verbindungstest abgebrochen", "Connection test cancelled")) {
+                                            connectionFeedback = tr("Verbindung wird getestet…", "Testing connection…")
+                                            try {
+                                                val result = KoSyncClient.authenticate(config)
+                                                connectionFeedback = result
+                                                status = result
+                                            } catch (t: Throwable) {
+                                                connectionFeedback = t.message ?: tr("Verbindung fehlgeschlagen", "Connection failed")
+                                                throw t
+                                            }
+                                        }
+                                    },
+                                    onSend = {
+                                        val chosen = books.filter { selected[it.key] == true }
+                                        val config = SyncConfig(serverType(target), serverUrl, username, password)
+                                        launchWork(tr("Übertragung abgebrochen", "Transfer cancelled")) {
+                                            KoSyncClient.uploadProgress(config, chosen) { status = it }
+                                            status = tr("Lesefortschritt übertragen.", "Reading progress transferred.")
+                                        }
+                                    },
+                                )
+                            }
                         }
+                    }
+                }
+
+                if (visibleBooks.isNotEmpty()) {
+                    AlphabetRail(
+                        books = visibleBooks,
+                        modifier = Modifier.align(Alignment.CenterEnd).windowInsetsPadding(WindowInsets.safeDrawing).padding(end = 4.dp),
+                    ) { bookIndex ->
+                        scope.launch { listState.animateScrollToItem(3 + bookIndex) }
                     }
                 }
             }
@@ -360,13 +394,14 @@ private fun ReadestTarget(mode: ExportMode, setMode: (ExportMode) -> Unit, enabl
     Text(tr("Exportart", "Export type"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
     SelectionRow(mode == ExportMode.MARKINGS_ONLY, tr("Nur Markierungen", "Highlights only")) { setMode(ExportMode.MARKINGS_ONLY) }
     SelectionRow(mode == ExportMode.FULL, tr("Markierungen + Buchdateien", "Highlights + book files")) { setMode(ExportMode.FULL) }
+    Text(tr("Readest kann Moon+-Markierungen aus .mrexpt importieren. Der erkannte Lesefortschritt bleibt zusätzlich in der Analyse erhalten; ein direkter Moon+-Fortschrittsimport ist in Readest derzeit nicht dokumentiert.", "Readest can import Moon+ highlights from .mrexpt. Recovered reading progress is preserved by the analysis; direct Moon+ progress import is not currently documented by Readest."), style = MaterialTheme.typography.labelSmall)
     Button(onClick = onExport, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(tr("Ausgewählte Bücher exportieren", "Export selected books")) }
 }
 
 @Composable
 private fun ServerTarget(
     target: TransferTarget, url: String, setUrl: (String) -> Unit, user: String, setUser: (String) -> Unit,
-    password: String, setPassword: (String) -> Unit, busy: Boolean, canSend: Boolean, onTest: () -> Unit, onSend: () -> Unit,
+    password: String, setPassword: (String) -> Unit, busy: Boolean, canSend: Boolean, feedback: String?, onTest: () -> Unit, onSend: () -> Unit,
 ) {
     val hint = when (target) {
         TransferTarget.CWA -> tr("CWA-Serveradresse. /kosync wird automatisch ergänzt.", "CWA server address. /kosync is added automatically.")
@@ -382,15 +417,25 @@ private fun ServerTarget(
         OutlinedButton(onClick = onTest, enabled = !localActionBlocked(busy) && url.isNotBlank() && user.isNotBlank(), modifier = Modifier.weight(1f)) { Text(tr("Verbindung testen", "Test connection")) }
         Button(onClick = onSend, enabled = !localActionBlocked(busy) && canSend && url.isNotBlank() && user.isNotBlank(), modifier = Modifier.weight(1f)) { Text(tr("Fortschritt senden", "Send progress")) }
     }
+    feedback?.takeIf { it.isNotBlank() }?.let {
+        Text(it, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+    }
 }
 
 private fun localActionBlocked(busy: Boolean): Boolean = busy
 
 @Composable
 private fun BookCard(book: BookItem, checked: Boolean, onChecked: (Boolean) -> Unit, onChooseBook: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Checkbox(checked = checked, onCheckedChange = onChecked)
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { onChecked(!checked) },
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Checkbox(checked = checked, onCheckedChange = onChecked, modifier = Modifier.size(38.dp))
             Cover(book.epub?.cover, book.extension)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(book.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -432,7 +477,7 @@ private fun Cover(bitmap: Bitmap?, extension: String) {
 private fun positionMethod(position: MoonPosition?): String = when {
     position == null -> tr("nicht vorhanden", "not available")
     position.chapterOrPage != null && position.section != null && position.offset != null -> tr("Kapitel + Abschnitt + Zeichenposition", "chapter + section + character offset")
-    position.chapterOrPage != null && position.offset == null -> tr("Seite + Prozent", "page + percentage")
+    position.chapterOrPage != null && position.offset == null -> tr("Seite/Kapitel + Prozent", "page/chapter + percentage")
     position.percent != null -> tr("Prozent-Fallback", "percentage fallback")
     else -> tr("Rohwert erhalten, noch nicht aufgelöst", "raw value preserved, unresolved")
 }
