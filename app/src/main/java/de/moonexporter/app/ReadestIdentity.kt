@@ -4,11 +4,13 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.InputStream
 import java.util.zip.ZipInputStream
 
 /** Exact Readest identity fallback used when an already-existing target folder cannot be rediscovered by metadata. */
 internal object ReadestIdentity {
+    internal fun chooseHash(newHash: String?, knownHash: String?, libraryHash: String?, sourceHash: String?): String? =
+        newHash ?: knownHash ?: libraryHash ?: sourceHash
+
     suspend fun sourceHash(context: Context, source: EpubMatch): String? = withContext(Dispatchers.IO) {
         runCatching {
             source.embeddedPath?.let { path ->
