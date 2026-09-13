@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.net.Uri
 import android.os.IBinder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +31,6 @@ internal data class ExportSnapshot(
 internal object ExportState {
     private val mutable = MutableStateFlow(ExportSnapshot())
     val state: StateFlow<ExportSnapshot> = mutable.asStateFlow()
-
     fun update(value: ExportSnapshot) { mutable.value = value }
 }
 
@@ -72,8 +70,8 @@ class ExportService : Service() {
         store.setSessionStatus(sessionId, "RUNNING")
         startForeground(NOTIFICATION_ID, notification(tr("Readest-Export wird vorbereitet…", "Preparing Readest export…"), 0, items.size, true))
         exportJob = scope.launch {
-            var done = items.count { it.state == "DONE" }
-            ExportState.update(ExportSnapshot(true, sessionId, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), done.toFloat() / items.size, done, items.size))
+            var done = 0
+            ExportState.update(ExportSnapshot(true, sessionId, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), 0f, 0, items.size))
             try {
                 ReadestTargetAudit.cleanupTargetParts(this@ExportService, session.targetUri)
                 for (item in items) {
