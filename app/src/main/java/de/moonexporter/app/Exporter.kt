@@ -27,18 +27,16 @@ internal object Exporter {
         if (mode == ExportMode.FULL) {
             val store = TransferStore(context.applicationContext)
             val pending = store.latestUnfinishedSession()
-            val sessionId = when {
-                pending == null -> store.createSession(targetTree, normalizeReadestNames, books)
-                pending.targetUri == targetTree -> {
-                    // An explicit user start must use the books currently visible in the UI.
-                    // Old unfinished sessions may come from an earlier app version or an older
-                    // analysis where the ebook source was not persisted yet. Mark that session
-                    // as superseded and create a fresh checkpoint set. completed_books still
-                    // allows already-verified unchanged books to be skipped safely.
-                    store.setSessionStatus(pending.id, "SUPERSEDED")
+            val action = explicitSessionAction(pending?.targetUri?.toString(), targetTree.toString())
+            val sessionId = when (action) {
+                ExplicitSessionAction.CREATE_NEW -> store.createSession(targetTree, normalizeReadestNames, books)
+                ExplicitSessionAction.SUPERSEDE_AND_CREATE -> {
+                    // Explicit user start must use the books currently visible in the UI.
+                    // Auto-resume still uses the persisted unfinished session directly through ExportService.
+                    pending?.let { store.setSessionStatus(it.id, "SUPERSEDED") }
                     store.createSession(targetTree, normalizeReadestNames, books)
                 }
-                else -> {
+                ExplicitSessionAction.BLOCK_OTHER_TARGET -> {
                     store.close()
                     error(tr("Es existiert noch ein unterbrochener Readest-Export für ein anderes Ziel. Öffne die App erneut mit Zugriff auf dieses Ziel oder beende/repariere zuerst diesen Auftrag.", "An interrupted Readest export for another target still exists. Resume or repair it before starting a different target."))
                 }
