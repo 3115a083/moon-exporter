@@ -2,9 +2,13 @@ package de.moonexporter.app
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class UtilityTest {
     @Test fun `parses synthetic epub position`() {
@@ -81,6 +85,25 @@ class UtilityTest {
     @Test fun `Readest partial md5 matches Readest sampling`() {
         val bytes = ByteArray(5_000_000) { (it % 251).toByte() }
         assertEquals("94c784935ab8dda597646e9bc916bbad", ReadestDirectExporter.readestPartialMd5(ByteArrayInputStream(bytes)))
+    }
+
+    @Test fun `Readest highlight resolver creates a real text range CFI`() {
+        val epub = File.createTempFile("readest-cfi-test-", ".epub")
+        try {
+            ZipOutputStream(epub.outputStream()).use { zip ->
+                zip.putNextEntry(ZipEntry("OEBPS/chapter.xhtml"))
+                zip.write("<html xmlns='http://www.w3.org/1999/xhtml'><head/><body><p id='p1'>Alpha highlighted phrase omega.</p></body></html>".toByteArray())
+                zip.closeEntry()
+            }
+            ReadestCfiResolver(epub, listOf("OEBPS/chapter.xhtml")).use { resolver ->
+                val result = resolver.resolve("highlighted phrase", preferredSpine = 0, preferredPosition = null)
+                assertNotNull(result)
+                assertEquals("epubcfi(/6/2!/4/2[p1],/1:6,/1:24)", result?.cfi)
+                assertTrue(result?.cfi?.contains(",") == true)
+            }
+        } finally {
+            epub.delete()
+        }
     }
 
     @Test fun `article sorting ignores common prefixes`() {
