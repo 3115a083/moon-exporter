@@ -2,6 +2,31 @@
 
 All notable Moon Exporter revisions are recorded here so future development can start from the documented state instead of re-auditing the full codebase. Older entries are intentionally concise; `docs/PROJECT_STATE.md` and the private handoff contain the current binding implementation rules.
 
+## 1.0.15 - 2026-09-13
+
+### Preserve the user's explicit export selection
+- Fixed a real-device case where an unselected book without a usable book source could still enter a Readest export.
+- Root cause: the selection map lived only in Compose `remember` state. Android may recreate the Activity while the SAF folder picker is open, after which the book list could repopulate and rebuild defaults before the picker callback ran.
+- The exact selected book keys are now snapshotted immediately before opening the Readest folder picker.
+- That snapshot uses `rememberSaveable`, so Activity recreation cannot broaden the export set.
+- On picker return, only the snapshotted keys are resolved against the current book list or restored analysis.
+- Books with no book file, no reading progress and no annotations are no longer selected by default after a fresh/restored analysis.
+
+### Missing-source hardening
+- `ExportService` no longer aborts the entire transfer when a source-less item is present.
+- Such items are recorded as `SKIPPED_NO_SOURCE` and the remaining books continue.
+- If a source-less item contains reading progress or annotations, the UI reports that it was skipped because no book file is assigned; it is not silently reported as transferred.
+- A source-less item without any transferable user data is skipped losslessly.
+- Added regression tests for source-less books with and without user data.
+
+### Verification
+- Tested app-code head: `03e33cad1f41735af4379de07f954c6dabdc3ca3`.
+- Android CI run `34784119249`: success, including privacy scan, unit tests, Android lint, debug APK build, manifest/permission audit and artifact upload.
+- CodeQL run `34784119262`: success.
+- Debug artifact: `MoonExporter-1.0.15-debug`, artifact ID `10326485715`.
+- Artifact ZIP digest: `sha256:bc6ed4c1a3408851175a54e476f00400c58325dbabf365eeb979f387e9f474de`.
+- APK SHA256: `7e2c1c42b832dab077a242f82b460816967b21dfbc1669dd8bdbd9c955fdcd57`.
+
 ## 1.0.14 - 2026-09-13
 
 ### Fresh transfer sources on manual retry
