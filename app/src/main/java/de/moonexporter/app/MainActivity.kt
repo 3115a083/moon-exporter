@@ -92,6 +92,7 @@ private fun MoonExporterApp(context: Context) {
     var filter by remember { mutableStateOf(BookFilter.ALL) }
     var target by remember { mutableStateOf(TransferTarget.READEST) }
     var exportMode by remember { mutableStateOf(ExportMode.MARKINGS_ONLY) }
+    var normalizeReadestNames by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf(tr("Wähle eine Moon+ Backup-Datei.", "Choose a Moon+ backup file.")) }
     var localBusy by remember { mutableStateOf(false) }
     var activeJob by remember { mutableStateOf<Job?>(null) }
@@ -198,7 +199,7 @@ private fun MoonExporterApp(context: Context) {
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
         val chosen = books.filter { selected[it.key] == true }
         launchWork(tr("Export abgebrochen", "Export cancelled")) {
-            Exporter.export(context, uri, chosen, exportMode, false) { status = it }
+            Exporter.export(context, uri, chosen, exportMode, false, normalizeReadestNames) { status = it }
             status = tr("Readest-Export abgeschlossen.", "Readest export complete.")
         }
     }
@@ -215,6 +216,9 @@ private fun MoonExporterApp(context: Context) {
     val selectedCount = selected.count { it.value }
     val selectedWithProgress = books.count { selected[it.key] == true && it.position?.percent != null }
     val selectedWithMarks = books.count { selected[it.key] == true && it.hasAnnotations }
+    val selectedCryptic = books.count {
+        selected[it.key] == true && (it.isCryptic || ProgressRecovery.looksOpaque(it.epub?.fileName ?: it.sourceFile))
+    }
     val missingBookFiles = books.count { selected[it.key] == true && it.position != null && it.epub?.partialMd5.isNullOrBlank() }
 
     MaterialTheme(colorScheme = lightColorScheme()) {
@@ -276,7 +280,14 @@ private fun MoonExporterApp(context: Context) {
                             Text(tr("Exportziel", "Export destination"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                             TransferTarget.entries.forEach { option -> SelectionRow(target == option, targetLabel(option)) { target = option; connectionFeedback = null } }
                             when (target) {
-                                TransferTarget.READEST -> ReadestTarget(exportMode, { exportMode = it }, enabled = !busy && selectedCount > 0) { exportPicker.launch(null) }
+                                TransferTarget.READEST -> ReadestTarget(
+                                    exportMode,
+                                    { exportMode = it },
+                                    normalizeReadestNames,
+                                    { normalizeReadestNames = it },
+                                    selectedCryptic,
+                                    enabled = !busy && selectedCount > 0,
+                                ) { exportPicker.launch(null) }
                                 else -> ServerTarget(
                                     target, serverUrl, { serverUrl = it; connectionFeedback = null }, username, { username = it; connectionFeedback = null }, password, { password = it; connectionFeedback = null }, busy, selectedCount > 0, connectionFeedback,
                                     onTest = {
@@ -352,11 +363,36 @@ private fun FilterDropdown(filter: BookFilter, onFilter: (BookFilter) -> Unit) {
 }
 
 @Composable
-private fun ReadestTarget(mode: ExportMode, setMode: (ExportMode) -> Unit, enabled: Boolean, onExport: () -> Unit) {
+private fun ReadestTarget(
+    mode: ExportMode,
+    setMode: (ExportMode) -> Unit,
+    normalizeNames: Boolean,
+    setNormalizeNames: (Boolean) -> Unit,
+    crypticCount: Int,
+    enabled: Boolean,
+    onExport: () -> Unit,
+) {
     Text(tr("Exportart", "Export type"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-    SelectionRow(mode == ExportMode.MARKINGS_ONLY, tr("Nur Markierungen", "Highlights only")) { setMode(ExportMode.MARKINGS_ONLY) }
-    SelectionRow(mode == ExportMode.FULL, tr("Markierungen + Buchdateien", "Highlights + book files")) { setMode(ExportMode.FULL) }
-    Text(tr("Readest kann Moon+-Markierungen aus .mrexpt importieren. Der erkannte Lesefortschritt bleibt zusätzlich in der Analyse erhalten; ein direkter Moon+-Fortschrittsimport ist in Readest derzeit nicht dokumentiert.", "Readest can import Moon+ highlights from .mrexpt. Recovered reading progress is preserved by the analysis; direct Moon+ progress import is not currently documented by Readest."), style = MaterialTheme.typography.labelSmall)
+    SelectionRow(mode == ExportMode.MARKINGS_ONLY, tr("Nur Markierungen (.mrexpt)", "Highlights only (.mrexpt)")) { setMode(ExportMode.MARKINGS_ONLY) }
+    SelectionRow(mode == ExportMode.FULL, tr("Direkt in Readest-Bibliothek", "Directly into Readest library")) { setMode(ExportMode.FULL) }
+    if (mode == ExportMode.FULL) {
+        Text(tr("Schreibt die ausgewählten Bücher direkt in Readest/Books, ergänzt library.json und config.json und sichert vorhandene Readest-Metadaten vor Änderungen.", "Writes selected books directly into Readest/Books, updates library.json and config.json, and backs up existing Readest metadata before changes."), style = MaterialTheme.typography.labelSmall)
+        if (crypticCount > 0) {
+            Text(tr("$crypticCount ausgewählte Moon+-Bücher haben kryptische Datei-/Hashnamen. Titel, Autor und ISBN werden soweit möglich aus EPUB, Moon+-Datenbank und Backup-Metadaten rekonstruiert.", "$crypticCount selected Moon+ books have cryptic file/hash names. Title, author and ISBN are reconstructed where possible from the EPUB, Moon+ database and backup metadata."), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { setNormalizeNames(!normalizeNames) }.padding(vertical = 6.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = normalizeNames, onCheckedChange = setNormalizeNames)
+                Column(Modifier.weight(1f)) {
+                    Text(tr("Rekonstruierte Dateinamen verwenden", "Use reconstructed filenames"), fontWeight = FontWeight.Medium)
+                    Text(tr("Beispiel: 7f3a9c….epub → Ermittelter Buchtitel.epub. Die Moon+-Originaldatei wird nicht umbenannt.", "Example: 7f3a9c….epub → Recovered Book Title.epub. The original Moon+ file is not renamed."), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    } else {
+        Text(tr("Readest kann Moon+-Markierungen aus .mrexpt importieren. Dieser Modus verändert keine Readest-Bibliotheksdateien.", "Readest can import Moon+ highlights from .mrexpt. This mode does not modify Readest library files."), style = MaterialTheme.typography.labelSmall)
+    }
     Button(onClick = onExport, enabled = enabled, modifier = Modifier.fillMaxWidth()) { Text(tr("Ausgewählte Bücher exportieren", "Export selected books")) }
 }
 
@@ -391,6 +427,9 @@ private fun BookCard(book: BookItem, checked: Boolean, onChecked: (Boolean) -> U
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(book.title, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 book.author?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                if (book.isCryptic || ProgressRecovery.looksOpaque(book.epub?.fileName ?: book.sourceFile)) {
+                    Text(tr("Kryptischer Moon+-Dateiname erkannt. Rekonstruierter Titel: ${book.title}", "Cryptic Moon+ filename detected. Recovered title: ${book.title}"), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium)
+                }
                 val percent = book.position?.percent
                 val progressText = percent?.let { "%.1f%%".format(Locale.ROOT, it) } ?: tr("kein Fortschritt", "no progress")
                 Text(tr("Lesefortschritt: $progressText", "Reading progress: $progressText"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
