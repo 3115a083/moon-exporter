@@ -15,52 +15,66 @@ WebDAV remains deferred until this local flow is reliable.
 
 ## Current revision
 - Repository: `3115a083/moon-exporter`
-- Branch: `revision/1.0.10-readest-marks-finished`
-- PR: #22, open and not merged
-- Version: `1.0.10`, versionCode 12
-- Tested app-code head: `50dbf63c56277a8ebe0f75d28b536dcb9037cbdf`
+- Branch: `revision/1.0.11-resumable-export`
+- PR: #24, open and not merged
+- Version: `1.0.11`, versionCode 13
 - minSdk 26, targetSdk 35, compileSdk 35
-- Android CI run `34765812351`: success
-- CodeQL run `34765812355`: success
-- Debug artifact: `MoonExporter-1.0.10-debug`, artifact ID `10320251587`
-- Artifact ZIP digest: `sha256:d58c48de33f1743399346da31dcac5515692d4223bdae4787567843055023d94`
-- Verified APK SHA256: `e784a81febfe282be623c290b6d436d898dba3c45949ff29a6384c2f94503078`
-- Documentation-only commits after this tested app-code head do not change app behavior.
+- Final CI/CodeQL IDs and APK hash are recorded after the final app-code head succeeds.
 
-## 1.0.10 Readest annotation fixes
-Real-device feedback after 1.0.9 showed that Moon+ annotations could disappear completely.
+## 1.0.11 reliability goal
+Real-device testing showed that direct Readest export could stop when the activity left the foreground. A process interruption could leave a copied book folder without a matching `library.json` row or leave a file only partly written.
 
-Two failure modes are addressed together:
-- Existing Moon Exporter Readest notes are no longer deleted before an exact replacement exists.
-- Real-world EPUB XHTML is parsed tolerantly with bounded Jsoup XHTML/XML parsing and HTML fallback instead of the previous strict Java XML DOM parser.
+Binding behavior from 1.0.11:
+- Direct Readest library export runs in a dedicated non-exported foreground `dataSync` service and is not owned by the Activity coroutine.
+- The service uses `START_REDELIVER_INTENT`; the next visible app start also resumes a persisted unfinished session.
+- Export state is checkpointed per book in app-private SQLite before and after relevant steps.
+- A book becomes `DONE` only after its Readest book file, `config.json` and `library.json` row validate together.
+- A previously completed book is never skipped solely because the local DB says DONE. The Readest target is revalidated first.
+- If the serialized Moon+ book/progress/annotation source fingerprint changes, the old completed checkpoint is not reused.
+- Only one unfinished direct-Readest session is reused for a target, preventing parallel duplicate sessions.
 
-Binding behavior:
-- Existing Readest `booknotes` are preserved by stable ID.
-- A Moon Exporter note is replaced only when a new exact EPUB range CFI has successfully been resolved.
-- Native/unrelated Readest notes are never removed.
-- On a clean direct export, when exact text-range resolution fails but the Moon chapter/spine is safe, a chapter-fallback Readest note is retained rather than dropping the annotation entirely.
-- Exact range CFI always takes precedence when resolution succeeds.
-- Original annotation data remains additionally preserved in `moon-export.mrexpt`.
-- Text matching normalizes non-breaking spaces, smart quotes, dash variants and soft hyphens while final CFI offsets remain based on the actual EPUB DOM.
-- Unit coverage includes a real-world-like XHTML case with `&nbsp;` and inline markup inside a highlight.
-- Do not invent Readest XPointer fields. Current Readest annotation data can use the CFI as the authoritative range anchor.
+## Target integrity and orphan repair
+Before and during a resumed export Moon Exporter audits the selected Readest `Books` directory.
 
-## 1.0.10 finished reading status
-Readest uses an explicit library status in addition to progress.
+Checks include:
+- expected 32-hex Readest book directory
+- EPUB/PDF existence
+- expected source size when known
+- recomputed Readest partialMD5 matching the target directory hash
+- valid per-book `config.json`
+- valid `library.json`
+- matching `library.json` row for the Readest book hash
+- Moon Exporter temporary `.part` files
 
-Binding behavior:
-- Moon+ progress >= 99.95% writes `progress: [100,100]` and `readingStatus: "finished"` to the already identified Readest library row.
-- `readingStatusUpdatedAt` is set when finished status is written.
-- Moon+ progress below the finish threshold does not forcibly clear an existing Readest reading status.
-- Do not rely on `[100,100]` alone for Readest's Finished/Beendet state.
+Repair behavior:
+- A partial/wrong ebook is removed only after its size/hash fails the known expected identity, then the saved book job is rerun.
+- Corrupt `config.json` or `library.json` is restored from the Moon Exporter recovery backup when one exists.
+- If the very first JSON write was interrupted and no previous file therefore existed, corrupt first-write `config.json`/`library.json` can be reset to `{}`/`[]` and rebuilt from the persisted book checkpoint.
+- A new hash directory appearing during a failed book attempt is associated with that current transfer as an orphan candidate and checked on retry/resume.
+- Each book gets an immediate second repair attempt after cleanup before the whole session is left in `INTERRUPTED` state.
+- Native/unrelated Readest files and rows are never guessed or deleted.
 
-## Retained Readest export performance and UI
-- An ebook embedded in `.mrpro` is prepared only once per export. Hashing, EPUB metadata inspection, highlight resolution and target copying reuse one temporary local book file.
-- Temporary ebook files are deleted immediately in `finally`; no durable ebook cache is introduced.
-- Highlight resolution reuses one open EPUB ZIP per book.
-- Local export progress is shown in the dedicated bottom section `4. Exportfortschritt`.
-- Direct Readest export reports named per-book phases and determinate progress.
-- The A-Z rail down arrow reaches the final progress section.
+## Recovery artifacts and cleanup
+- `config.moon-exporter.bak.json` and `library.moon-exporter.bak.json` are temporary recovery files while a session is not fully committed.
+- Moon Exporter `.part` files are temporary and removed by target audit.
+- After every book has been verified and the session commits successfully, those recovery artifacts are removed.
+- `moon-export.mrexpt` remains an intentional annotation fallback, not a temporary artifact.
+- The local checkpoint database is stored only in the app-private data directory and is removed automatically by Android when the app is uninstalled.
+- Android cannot guarantee a final cleanup callback if the app is uninstalled exactly while an external SAF file is being written. Therefore external writes must be self-validating and repairable on a later run rather than relying on uninstall cleanup.
+
+## Persistent backup analysis
+- The last completed `.mrpro` analysis is stored in the same app-private SQLite database.
+- Cache identity uses the granted source URI plus size and last-modified timestamp.
+- If that source identity is unchanged, the book list can be restored without re-running the full backup scan.
+- If it changed, the backup is analyzed again.
+- Cached covers are not persisted as durable image blobs; restored books may initially show placeholders while retaining the important source/progress/annotation metadata.
+
+## 1.0.10 behavior retained
+- Existing Moon Exporter Readest annotations are preserved until a better exact replacement exists.
+- Real EPUB XHTML is parsed tolerantly with bounded Jsoup parsing.
+- Exact Readest range CFI is preferred; safe chapter fallback is retained when exact text resolution fails.
+- Moon+ progress >= 99.95% writes Readest `readingStatus: "finished"` plus `readingStatusUpdatedAt`.
+- Embedded ebooks are prepared only once per book export.
 
 ## Direct Readest structure
 - `Readest/Books/library.json` is the local library index.
@@ -68,14 +82,8 @@ Binding behavior:
 - Moon Exporter may write EPUB/PDF, `cover.png`, `config.json`, and `moon-export.mrexpt` fallback.
 - `nav.json` is a derived Readest cache and is not fabricated.
 - Readest `bookHash` uses Readest's own partialMD5 sampling and is distinct from KOReader/KOSync partialMD5.
-- Existing `library.json` and per-book `config.json` are merged and backed up before the first Moon Exporter modification.
-- Existing book files with the same Readest hash are not duplicated.
+- Existing book files with the same verified Readest hash are not duplicated.
 - Percentage progress is a transparent fallback, not a real Readest page count.
-
-## Cryptic Moon+ filenames
-- Numeric/hash-like Moon+ filenames are technical identifiers, not trustworthy titles.
-- Readest direct export offers optional normalized output filenames reconstructed from EPUB metadata first, then recovered Moon+ database/backup metadata.
-- Original Moon+ backup and ebook files are never renamed or modified.
 
 ## Moon+ reading progress
 - Full `.mrpro` backups recover progress primarily from `shared_prefs/positions10.xml` SharedPreferences entries.
@@ -96,14 +104,15 @@ Binding behavior:
 - SAF only for user files. No broad storage permissions.
 - `android:allowBackup="false"`.
 - No credential/Auth-header logging.
-- Temporary export ebooks must be removed after use.
+- App-private SQLite/checkpoint state disappears on uninstall.
 
 ## Next real-device checks
-1. Re-export the same Readest book that lost annotations in 1.0.9.
-2. Verify annotations appear in Readest and exact-range annotations are visibly highlighted and navigate to their real text.
-3. Verify a Moon+ 100% book appears as Readest Finished/Beendet rather than only 100%.
-4. If exact matching still fails for some annotations, surface safe exact/fallback/unresolved counts without logging annotation text or private paths.
-5. Continue structural reading-resume conversion and KOSync/CWA/BookLore hardening after these Readest paths are stable.
+1. Start a multi-book Readest export, switch to another app for several minutes and verify transfer continues from the notification/service.
+2. Force-close/kill during ebook copy, then reopen and verify the partial target is detected and repaired without duplicating the book.
+3. Kill after the book directory exists but before the library row commits, then reopen and verify the row is reconstructed.
+4. Kill during `config.json`/`library.json` writing and verify backup/reset recovery plus checkpoint replay.
+5. Repeat export unchanged and verify already validated books are skipped; then change Moon+ progress/annotations and verify only changed fingerprint work is replayed.
+6. Verify no `.part` or recovery `.bak.json` files remain after a fully successful session.
 
 ## Development rule
-Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #22 is authoritative for 1.0.10. PR #23 was a duplicate and is closed unmerged. Do not merge revision PRs without explicit user approval.
+Future sessions must read this file, `CHANGELOG.md` and the private handoff before changing scope. PR #24 is authoritative for 1.0.11 and must not be merged without explicit user approval.
