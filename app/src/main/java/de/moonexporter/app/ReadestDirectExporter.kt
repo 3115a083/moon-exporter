@@ -42,6 +42,8 @@ internal object ReadestDirectExporter {
         val spinePaths: List<String> = emptyList(),
     )
 
+    private data class NoteBuild(val note: JSONObject, val exact: Boolean)
+
     suspend fun export(
         context: Context,
         targetTree: Uri,
@@ -146,12 +148,12 @@ internal object ReadestDirectExporter {
                     .getOrElse { error(tr("Vorhandene Readest config.json ist ungültig", "Existing Readest config.json is invalid")) }
                 val existed = originalConfig.isNotBlank()
                 if (existed) backupOnce(context, dir, "config.moon-exporter.bak.json", originalConfig, "application/json")
-                val mappedNotes = mergeConfig(config, book, readestHash, metaHash, epubInfo, resolver, now, existed)
+                val exactNotes = mergeConfig(config, book, readestHash, metaHash, epubInfo, resolver, now, existed)
                 resolver?.close()
-                if (book.hasAnnotations && mappedNotes < noteCount) {
+                if (book.hasAnnotations && exactNotes < noteCount) {
                     warnings += tr(
-                        "${book.title}: $mappedNotes von $noteCount Markierungen exakt positioniert; Rest als .mrexpt erhalten",
-                        "${book.title}: $mappedNotes of $noteCount highlights positioned exactly; remainder preserved as .mrexpt",
+                        "${book.title}: $exactNotes von $noteCount Markierungen exakt positioniert; übrige Markierungen wurden erhalten oder am Kapitel verankert",
+                        "${book.title}: $exactNotes of $noteCount highlights positioned exactly; remaining highlights were preserved or anchored to the chapter",
                     )
                 }
                 writeOrReplaceText(context, dir, "config.json", config.toString(), "application/json")
@@ -243,23 +245,28 @@ internal object ReadestDirectExporter {
         config.put("updatedAt", now)
 
         val records = book.annotation?.records.orEmpty()
-        val generatedIds = records.associateBy { noteId(it) }
         val old = config.optJSONArray("booknotes") ?: JSONArray()
-        val merged = JSONArray()
+        val byId = linkedMapOf<String, JSONObject>()
+        val anonymous = mutableListOf<JSONObject>()
         for (i in 0 until old.length()) {
             val note = old.optJSONObject(i) ?: continue
             val id = note.optString("id")
-            if (id !in generatedIds) merged.put(note)
+            if (id.isBlank()) anonymous += note else byId[id] = note
         }
 
-        var mapped = 0
+        var exact = 0
         for (record in records) {
-            val note = directNote(bookHash, metaHash, record, epubInfo, resolver) ?: continue
-            merged.put(note)
-            mapped++
+            val built = directNote(bookHash, metaHash, record, epubInfo, resolver) ?: continue
+            val id = built.note.getString("id")
+            if (built.exact || id !in byId) byId[id] = built.note
+            if (built.exact) exact++
         }
+
+        val merged = JSONArray()
+        anonymous.forEach(merged::put)
+        byId.values.forEach(merged::put)
         if (merged.length() > 0) config.put("booknotes", merged) else config.remove("booknotes")
-        return mapped
+        return exact
     }
 
     private fun directNote(
@@ -268,19 +275,21 @@ internal object ReadestDirectExporter {
         record: AnnotationRecord,
         epubInfo: EpubInfo,
         resolver: ReadestCfiResolver?,
-    ): JSONObject? {
+    ): NoteBuild? {
         val text = record.original?.trim().orEmpty()
-        if (text.isBlank() || resolver == null) return null
+        if (text.isBlank()) return null
         val chapter = record.chapter
         val preferredSpine = chapter?.let { epubInfo.navToSpine[it] }
-        val resolved = resolver.resolve(text, preferredSpine, record.position) ?: return null
+        val resolved = resolver?.resolve(text, preferredSpine, record.position)
+        val fallbackSpine = preferredSpine ?: chapter?.takeIf { it in epubInfo.spinePaths.indices }
+        val cfi = resolved?.cfi ?: fallbackSpine?.let { "epubcfi(/6/${2 * (it + 1)}!)" } ?: return null
         val created = record.timestampMs?.takeIf { it > 0 } ?: System.currentTimeMillis()
-        return JSONObject()
+        val note = JSONObject()
             .put("bookHash", bookHash)
             .put("metaHash", metaHash)
             .put("id", noteId(record))
             .put("type", "annotation")
-            .put("cfi", resolved.cfi)
+            .put("cfi", cfi)
             .put("text", text)
             .put("style", "highlight")
             .put("color", moonColor(record.color))
@@ -289,6 +298,7 @@ internal object ReadestDirectExporter {
             .put("createdAt", created)
             .put("updatedAt", created)
             .put("deletedAt", JSONObject.NULL)
+        return NoteBuild(note, resolved != null)
     }
 
     private fun noteId(record: AnnotationRecord): String {
@@ -331,7 +341,13 @@ internal object ReadestDirectExporter {
         row.put("metadataUpdatedAt", now)
         row.put("deletedAt", JSONObject.NULL)
         coverHash?.let { row.put("coverHash", it) }
-        if (!row.has("progress")) position?.percent?.let { row.put("progress", progressPair(it)) }
+        position?.percent?.let { percent ->
+            if (!row.has("progress") || percent >= 99.95) row.put("progress", progressPair(percent))
+            if (percent >= 99.95) {
+                row.put("readingStatus", "finished")
+                row.put("readingStatusUpdatedAt", now)
+            }
+        }
     }
 
     private fun progressPair(percent: Double): JSONArray = JSONArray().put(percent.coerceIn(0.0, 100.0).roundToInt()).put(100)
