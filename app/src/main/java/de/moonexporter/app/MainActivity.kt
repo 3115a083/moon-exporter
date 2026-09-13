@@ -219,6 +219,7 @@ private fun MoonExporterApp(context: Context) {
             BookFilter.WITH_PROGRESS -> it.position?.percent != null
             BookFilter.WITHOUT_PROGRESS -> it.position?.percent == null
             BookFilter.WITH_BOOK -> it.hasBookFile
+            BookFilter.WITHOUT_BOOK -> !it.hasBookFile
         }
     }
     val selectedCount = selected.count { it.value }
@@ -410,7 +411,8 @@ private fun ServerTarget(
     }
     Text(tr("Die Zugangsdaten können bereits eingegeben werden, während Schritt 1 noch analysiert.", "Credentials can be entered while step 1 is still analyzing."), style = MaterialTheme.typography.bodySmall)
     Text(hint, style = MaterialTheme.typography.bodySmall)
-    OutlinedTextField(url, setUrl, label = { Text(tr("Server-URL (HTTPS)", "Server URL (HTTPS)")) }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+    Text(tr("HTTPS wird empfohlen. HTTP ist nur für private Heimnetz-Adressen erlaubt.", "HTTPS is recommended. HTTP is only allowed for private home-network addresses."), style = MaterialTheme.typography.labelSmall)
+    OutlinedTextField(url, setUrl, label = { Text(tr("Server-URL", "Server URL")) }, singleLine = true, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
     OutlinedTextField(user, setUser, label = { Text(tr("Benutzername", "Username")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
     OutlinedTextField(password, setPassword, label = { Text(tr("Passwort", "Password")) }, singleLine = true, modifier = Modifier.fillMaxWidth(), visualTransformation = PasswordVisualTransformation())
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -494,6 +496,7 @@ private fun filterLabel(value: BookFilter): String = when (value) {
     BookFilter.WITH_PROGRESS -> tr("Mit Lesefortschritt", "With reading progress")
     BookFilter.WITHOUT_PROGRESS -> tr("Ohne Lesefortschritt", "Without reading progress")
     BookFilter.WITH_BOOK -> tr("Mit zugeordneter Buchdatei", "With matched book file")
+    BookFilter.WITHOUT_BOOK -> tr("Ohne Buchdatei", "Without book file")
 }
 
 @Composable
