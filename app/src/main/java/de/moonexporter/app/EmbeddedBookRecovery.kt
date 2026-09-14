@@ -5,6 +5,7 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -18,6 +19,7 @@ import kotlin.coroutines.coroutineContext
  */
 internal object EmbeddedBookRecovery {
     private const val MAX_ENTRIES = 40_000
+    private const val MAX_NAMES_BYTES = 4 * 1024 * 1024
     private const val MAX_BOOK_BYTES = 2L * 1024 * 1024 * 1024
 
     suspend fun attach(context: Context, backupUri: Uri, books: List<BookItem>, onProgress: (String) -> Unit = {}): List<BookItem> =
@@ -25,9 +27,10 @@ internal object EmbeddedBookRecovery {
             if (books.isEmpty()) return@withContext books
             val wanted = books.filter { !it.hasBookFile }.flatMap { book ->
                 listOf(book.sourceFile, book.sourceFile.substringAfterLast('/'), "${book.originalName}.${book.extension}")
-            }.map { normalizePath(it) }.filter { it.isNotBlank() }.toSet()
+            }.map(::normalizePath).filter { it.isNotBlank() }.toSet()
             if (wanted.isEmpty()) return@withContext books
 
+            val names = readNames(context, backupUri)
             val matches = linkedMapOf<String, EpubMatch>()
             context.contentResolver.openInputStream(backupUri)?.buffered()?.use { raw ->
                 ZipInputStream(raw).use { zip ->
@@ -39,22 +42,33 @@ internal object EmbeddedBookRecovery {
                         if (++count > MAX_ENTRIES) throw IOException(tr("Backup enthält zu viele Dateien", "Backup contains too many files"))
                         val clean = normalizePath(entry.name)
                         if (clean.contains("../") || clean.startsWith("..")) continue
-                        val base = clean.substringAfterLast('/')
-                        val ext = BookFormats.extension(base)
-                        if (ext !in BookFormats.readestCompatible || (clean !in wanted && base !in wanted)) continue
-                        onProgress(tr("Buchformat wird geprüft: $base", "Checking book format: $base"))
+
+                        val candidates = MoonImporter.mrproLogicalCandidates(clean, names)
+                            .map(::normalizePath)
+                            .distinct()
+                        val logical = candidates.firstOrNull { candidate ->
+                            BookFormats.extension(candidate) in BookFormats.readestCompatible &&
+                                (candidate in wanted || candidate.substringAfterLast('/') in wanted)
+                        } ?: continue
+                        val fileName = logical.substringAfterLast('/')
+                        val ext = BookFormats.extension(fileName)
+                        if (ext !in BookFormats.readestCompatible) continue
+
+                        onProgress(tr("Buchformat wird geprüft: $fileName", "Checking book format: $fileName"))
                         val bounded = CountingBoundedInputStream(zip, MAX_BOOK_BYTES)
                         val hash = partialMd5(bounded)
                         val match = EpubMatch(
                             backupUri = backupUri,
                             archiveEntryName = entry.name,
-                            fileName = base,
-                            title = base.substringBeforeLast('.', base).takeUnless(ProgressRecovery::looksOpaque),
+                            fileName = fileName,
+                            title = fileName.substringBeforeLast('.', fileName).takeUnless(ProgressRecovery::looksOpaque),
                             partialMd5 = hash,
                             size = bounded.count,
                         )
-                        matches[clean] = match
-                        matches[base] = match
+                        candidates.forEach { candidate ->
+                            matches[candidate] = match
+                            matches[candidate.substringAfterLast('/')] = match
+                        }
                     }
                 }
             } ?: return@withContext books
@@ -72,6 +86,29 @@ internal object EmbeddedBookRecovery {
                 }
             }
         }
+
+    private fun readNames(context: Context, backupUri: Uri): List<String> {
+        context.contentResolver.openInputStream(backupUri)?.buffered()?.use { raw ->
+            ZipInputStream(raw).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (entry.isDirectory || !entry.name.substringAfterLast('/').equals("_names.list", true)) continue
+                    val out = ByteArrayOutputStream()
+                    val buffer = ByteArray(16 * 1024)
+                    var total = 0
+                    while (true) {
+                        val n = zip.read(buffer)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_NAMES_BYTES) return emptyList()
+                        out.write(buffer, 0, n)
+                    }
+                    return out.toString(Charsets.UTF_8.name()).removePrefix("\uFEFF").lines().map(String::trim)
+                }
+            }
+        }
+        return emptyList()
+    }
 
     private fun normalizePath(value: String): String = value.replace('\\', '/').trimStart('/').lowercase(Locale.ROOT)
 
