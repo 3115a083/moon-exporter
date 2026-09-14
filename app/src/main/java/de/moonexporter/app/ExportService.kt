@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.coroutines.coroutineContext
 
 internal data class ExportSnapshot(
@@ -126,6 +127,9 @@ class ExportService : Service() {
             ExportState.update(ExportSnapshot(true, session.id, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), 0f, 0, items.size))
             try {
                 ReadestTargetAudit.cleanupTargetParts(this@ExportService, session.targetUri)
+                publish(session.id, done, items.size, tr("Moon+-Backup wird einmalig für schnellen Zugriff vorbereitet…", "Preparing Moon+ backup once for fast access…"))
+                BackupArchiveCache.prepare(this@ExportService, items.map { it.book })
+
                 for ((itemIndex, item) in items.withIndex()) {
                     coroutineContext.ensureActive()
 
@@ -153,6 +157,7 @@ class ExportService : Service() {
                     if (!knownHash.isNullOrBlank()) {
                         val validation = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, knownHash, item.book.epub?.size)
                         if (validation.complete) {
+                            ReadestSidecarCleanup.normalizeMrexpt(this@ExportService, session.targetUri, knownHash)
                             store.setItemState(item.id, "DONE", knownHash)
                             store.rememberCompleted(session.targetUri, item, knownHash)
                             done++
@@ -161,67 +166,76 @@ class ExportService : Service() {
                         }
                     }
 
-                    val source = item.book.epub ?: error(tr("Keine Buchdatei für ${item.book.title} gespeichert", "No book source stored for ${item.book.title}"))
-                    StorageSafety.ensureCacheCapacity(this@ExportService, source.size)
-                    val expectedHash = ReadestIdentity.sourceHash(this@ExportService, source)
-                        ?: error(tr("Readest-Buch-ID konnte vor dem Export nicht aus der gespeicherten Quelle berechnet werden: ${item.book.title}", "Could not calculate Readest book ID from the persisted source before export: ${item.book.title}"))
-                    if (knownHash == null) knownHash = expectedHash
-                    store.setItemState(item.id, "PENDING", knownHash)
+                    val prepared = prepareBookForExport(item.book)
+                    val exportBook = prepared.first
+                    val tempFile = prepared.second
+                    try {
+                        val source = exportBook.epub ?: error(tr("Keine Buchdatei für ${item.book.title} gespeichert", "No book source stored for ${item.book.title}"))
+                        StorageSafety.ensureCacheCapacity(this@ExportService, source.size)
+                        val expectedHash = ReadestIdentity.sourceHash(this@ExportService, source)
+                            ?: error(tr("Readest-Buch-ID konnte vor dem Export nicht aus der gespeicherten Quelle berechnet werden: ${item.book.title}", "Could not calculate Readest book ID from the persisted source before export: ${item.book.title}"))
+                        if (knownHash == null) knownHash = expectedHash
+                        store.setItemState(item.id, "PENDING", knownHash)
 
-                    var lastFailure: Throwable? = null
-                    var committed = false
-                    for (attempt in 0..1) {
-                        coroutineContext.ensureActive()
-                        val attemptLabel = if (attempt == 0) {
-                            tr("Prüfe/Repariere ${item.book.title}", "Checking/repairing ${item.book.title}")
-                        } else {
-                            tr("Zweiter Reparaturversuch: ${item.book.title}", "Second repair attempt: ${item.book.title}")
-                        }
-                        publish(session.id, done, items.size, attemptLabel)
-
-                        val precheck = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, expectedHash, item.book.epub?.size)
-                        if (precheck.complete) {
-                            knownHash = expectedHash
-                            store.setItemState(item.id, "DONE", expectedHash)
-                            store.rememberCompleted(session.targetUri, item, expectedHash)
-                            done++
-                            publish(session.id, done, items.size, tr("Repariert und geprüft: ${item.book.title}", "Repaired and verified: ${item.book.title}"))
-                            committed = true
-                            break
-                        }
-
-                        store.setItemState(item.id, "RUNNING", expectedHash)
-                        try {
-                            UniversalReadestExporter.export(this@ExportService, session.targetUri, listOf(item.book), session.normalizeNames) { p ->
-                                val base = done.toFloat() / items.size
-                                val local = p.fraction ?: 0f
-                                val message = overallBookProgress(p.message, itemIndex, items.size)
-                                ExportState.update(ExportSnapshot(true, session.id, message, (base + local / items.size).coerceIn(0f, 1f), done, items.size))
-                                notifyProgress(message, done, items.size)
+                        var lastFailure: Throwable? = null
+                        var committed = false
+                        for (attempt in 0..1) {
+                            coroutineContext.ensureActive()
+                            val attemptLabel = if (attempt == 0) {
+                                tr("Prüfe/Repariere ${item.book.title}", "Checking/repairing ${item.book.title}")
+                            } else {
+                                tr("Zweiter Reparaturversuch: ${item.book.title}", "Second repair attempt: ${item.book.title}")
                             }
-                            knownHash = expectedHash
-                            val validation = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, expectedHash, item.book.epub?.size)
-                            if (validation.complete) {
+                            publish(session.id, done, items.size, attemptLabel)
+
+                            val precheck = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, expectedHash, source.size)
+                            if (precheck.complete) {
+                                ReadestSidecarCleanup.normalizeMrexpt(this@ExportService, session.targetUri, expectedHash)
+                                knownHash = expectedHash
                                 store.setItemState(item.id, "DONE", expectedHash)
                                 store.rememberCompleted(session.targetUri, item, expectedHash)
                                 done++
-                                publish(session.id, done, items.size, tr("Gesichert und geprüft: ${item.book.title}", "Committed and verified: ${item.book.title}"))
+                                publish(session.id, done, items.size, tr("Repariert und geprüft: ${item.book.title}", "Repaired and verified: ${item.book.title}"))
                                 committed = true
                                 break
                             }
-                            lastFailure = IllegalStateException(tr(
-                                "Readest-Zielprüfung fehlgeschlagen (${item.book.title}): ${validation.reason ?: "unbekannter Prüffehler"}",
-                                "Readest target validation failed (${item.book.title}): ${validation.reason ?: "unknown validation failure"}",
-                            ))
-                        } catch (t: Throwable) {
-                            if (t is CancellationException) throw t
-                            knownHash = expectedHash
-                            lastFailure = t
-                            if (StorageSafety.userMessage(t) != null) break
+
+                            store.setItemState(item.id, "RUNNING", expectedHash)
+                            try {
+                                UniversalReadestExporter.export(this@ExportService, session.targetUri, listOf(exportBook), session.normalizeNames) { p ->
+                                    val base = done.toFloat() / items.size
+                                    val local = p.fraction ?: 0f
+                                    val message = overallBookProgress(p.message, itemIndex, items.size)
+                                    ExportState.update(ExportSnapshot(true, session.id, message, (base + local / items.size).coerceIn(0f, 1f), done, items.size))
+                                    notifyProgress(message, done, items.size)
+                                }
+                                knownHash = expectedHash
+                                ReadestSidecarCleanup.normalizeMrexpt(this@ExportService, session.targetUri, expectedHash)
+                                val validation = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, expectedHash, source.size)
+                                if (validation.complete) {
+                                    store.setItemState(item.id, "DONE", expectedHash)
+                                    store.rememberCompleted(session.targetUri, item, expectedHash)
+                                    done++
+                                    publish(session.id, done, items.size, tr("Gesichert und geprüft: ${item.book.title}", "Committed and verified: ${item.book.title}"))
+                                    committed = true
+                                    break
+                                }
+                                lastFailure = IllegalStateException(tr(
+                                    "Readest-Zielprüfung fehlgeschlagen (${item.book.title}): ${validation.reason ?: "unbekannter Prüffehler"}",
+                                    "Readest target validation failed (${item.book.title}): ${validation.reason ?: "unknown validation failure"}",
+                                ))
+                            } catch (t: Throwable) {
+                                if (t is CancellationException) throw t
+                                knownHash = expectedHash
+                                lastFailure = t
+                                if (StorageSafety.userMessage(t) != null) break
+                            }
+                            store.setItemState(item.id, "INTERRUPTED", expectedHash, lastFailure?.message)
                         }
-                        store.setItemState(item.id, "INTERRUPTED", expectedHash, lastFailure?.message)
+                        if (!committed) throw lastFailure ?: IllegalStateException(tr("Buch konnte nach zwei Versuchen nicht repariert werden", "Book could not be repaired after two attempts"))
+                    } finally {
+                        tempFile?.let { runCatching { it.delete() } }
                     }
-                    if (!committed) throw lastFailure ?: IllegalStateException(tr("Buch konnte nach zwei Versuchen nicht repariert werden", "Book could not be repaired after two attempts"))
                 }
                 ReadestTargetAudit.cleanupRecoveryArtifacts(this@ExportService, session.targetUri)
                 store.setSessionStatus(session.id, "DONE")
@@ -246,8 +260,30 @@ class ExportService : Service() {
                 ExportState.update(ExportSnapshot(false, session.id, text, done.toFloat() / items.size, done - skipped, items.size, text))
                 notifyProgress(text, done, items.size, false)
             } finally {
+                BackupArchiveCache.clear()
                 finishService()
             }
+        }
+    }
+
+    private fun prepareBookForExport(book: BookItem): Pair<BookItem, File?> {
+        val source = book.epub ?: return book to null
+        if (source.backupUri == null || source.archiveEntryName.isNullOrBlank()) return book to null
+        val ext = BookFormats.extension(source.fileName, book.extension).ifBlank { "bin" }
+        val temp = File.createTempFile("moon-export-book-", ".$ext", cacheDir)
+        return try {
+            val copied = temp.outputStream().buffered(256 * 1024).use { out ->
+                BackupArchiveCache.copyEntry(source, out).also { out.flush() }
+            }
+            if (!copied) {
+                runCatching { temp.delete() }
+                book to null
+            } else {
+                book.copy(epub = source.copy(embeddedPath = temp.absolutePath)) to temp
+            }
+        } catch (t: Throwable) {
+            runCatching { temp.delete() }
+            throw t
         }
     }
 
@@ -277,6 +313,22 @@ class ExportService : Service() {
             .setOngoing(running)
             .setCategory(Notification.CATEGORY_PROGRESS)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
+        if (running) {
+            val cancelIntent = Intent(this, ExportService::class.java).setAction(ACTION_CANCEL)
+            val cancelPending = PendingIntent.getService(
+                this,
+                1,
+                cancelIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            builder.addAction(
+                Notification.Action.Builder(
+                    android.R.drawable.ic_menu_close_clear_cancel,
+                    tr("Abbrechen", "Cancel"),
+                    cancelPending,
+                ).build(),
+            )
+        }
         if (running && total > 0) builder.setProgress(total, done.coerceIn(0, total), false) else builder.setProgress(0, 0, false)
         return builder.build()
     }
@@ -290,6 +342,7 @@ class ExportService : Service() {
 
     override fun onDestroy() {
         exportJob?.cancel()
+        BackupArchiveCache.clear()
         scope.cancel()
         store.close()
         super.onDestroy()
