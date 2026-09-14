@@ -90,6 +90,8 @@ class AnalysisService : Service() {
                     .sortedWith(compareBy<Triple<Uri, String, MoonBackupDescriptor>> { it.third.date ?: java.time.LocalDate.MIN }.thenBy { it.second })
                 val scans = mutableListOf<List<BookItem>>()
                 ordered.forEachIndexed { index, (uri, name, _) ->
+                    update(tr("Backup ${index + 1}/${ordered.size} wird sicher geprüft: $name", "Security-checking backup ${index + 1}/${ordered.size}: $name"))
+                    BackupPreflight.validate(this@AnalysisService, uri)
                     update(tr("Backup ${index + 1}/${ordered.size} wird analysiert: $name", "Analyzing backup ${index + 1}/${ordered.size}: $name"))
                     val scanned = MoonImporter.scanMrpro(this@AnalysisService, uri) { update(it) }
                     val withAllFormats = EmbeddedBookRecovery.attach(this@AnalysisService, uri, scanned) { update(it) }
