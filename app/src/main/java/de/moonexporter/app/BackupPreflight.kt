@@ -18,6 +18,7 @@ internal object BackupPreflight {
     private const val MAX_ANNOTATION_COMPRESSED = 32 * 1024 * 1024
     private const val MAX_ANNOTATION_INFLATED = 16 * 1024 * 1024
     private const val MAX_BOOK_BYTES = 2L * 1024 * 1024 * 1024
+    private val RISKY_BOOK_EXTENSIONS = BookFormats.readestCompatible + "cbr"
 
     private class SizeLimitException(message: String) : IOException(message)
 
@@ -37,7 +38,7 @@ internal object BackupPreflight {
                         val compressedPayload = readBounded(zip, MAX_ANNOTATION_COMPRESSED)
                             ?: throw SizeLimitException(tr("Moon+-Markierungsdatei ist ungewöhnlich groß", "Moon+ annotation file is unusually large"))
                         validateInflatedAnnotation(compressedPayload)
-                    } else if (BookFormats.extension(lower) in BookFormats.readestCompatible) {
+                    } else if (BookFormats.extension(lower) in RISKY_BOOK_EXTENSIONS) {
                         if (entry.size > MAX_BOOK_BYTES) throw SizeLimitException(tr("Buchdatei im Backup ist größer als 2 GiB", "Book file in backup is larger than 2 GiB"))
                         if (entry.size < 0) drainBounded(zip, MAX_BOOK_BYTES)
                     }
