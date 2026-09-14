@@ -9,7 +9,9 @@ import kotlinx.coroutines.withContext
 internal object BookFileInspector {
     suspend fun inspect(context: Context, uri: Uri): EpubMatch? = withContext(Dispatchers.IO) {
         val name = displayName(context, uri) ?: return@withContext null
-        if (name.endsWith(".epub", true)) return@withContext MoonImporter.inspectSelectedEpub(context, uri)
+        val ext = BookFormats.extension(name)
+        if (ext !in BookFormats.readestCompatible) return@withContext null
+        if (ext == "epub") return@withContext MoonImporter.inspectSelectedEpub(context, uri)
         val hash = context.contentResolver.openInputStream(uri)?.use { partialMd5(it.buffered()) } ?: return@withContext null
         val inferred = name.substringBeforeLast('.', name).takeUnless { ProgressRecovery.looksOpaque(it) }
         EpubMatch(
