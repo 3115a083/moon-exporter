@@ -143,7 +143,7 @@ class ExportService : Service() {
 
                         store.setItemState(item.id, "RUNNING", expectedHash)
                         try {
-                            ReadestDirectExporter.export(this@ExportService, session.targetUri, listOf(item.book), session.normalizeNames) { p ->
+                            UniversalReadestExporter.export(this@ExportService, session.targetUri, listOf(item.book), session.normalizeNames) { p ->
                                 val base = done.toFloat() / items.size
                                 val local = p.fraction ?: 0f
                                 val message = overallBookProgress(p.message, itemIndex, items.size)
