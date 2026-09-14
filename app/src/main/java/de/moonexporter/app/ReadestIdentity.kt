@@ -12,6 +12,8 @@ internal object ReadestIdentity {
         newHash ?: knownHash ?: libraryHash ?: sourceHash
 
     suspend fun sourceHash(context: Context, source: EpubMatch): String? = withContext(Dispatchers.IO) {
+        source.partialMd5?.takeIf { it.matches(Regex("^[0-9a-fA-F]{32}$")) }?.lowercase()?.let { return@withContext it }
+
         runCatching {
             source.embeddedPath?.let { path ->
                 File(path).takeIf { it.isFile }?.inputStream()?.buffered()?.use(ReadestDirectExporter::readestPartialMd5)

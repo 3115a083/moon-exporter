@@ -4,7 +4,11 @@ import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.io.Reader
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
@@ -20,6 +24,8 @@ internal data class SyncConfig(
 )
 
 internal object KoSyncClient {
+    private const val MAX_RESPONSE_CHARS = 16_384
+
     suspend fun authenticate(config: SyncConfig): String = withContext(Dispatchers.IO) {
         val response = request("GET", "${endpointRoot(config)}/users/auth", config, null)
         if (response.code !in 200..299) throw syncError(response.code, response.body, config.serverType)
@@ -53,6 +59,7 @@ internal object KoSyncClient {
         val scheme = uri.scheme?.lowercase(Locale.ROOT)
         require(scheme == "https" || scheme == "http") { tr("Server-URL muss HTTP oder HTTPS verwenden", "Server URL must use HTTP or HTTPS") }
         require(!uri.host.isNullOrBlank()) { tr("Ungültige Server-URL", "Invalid server URL") }
+        require(uri.userInfo == null) { tr("Zugangsdaten dürfen nicht in der Server-URL stehen", "Credentials must not be embedded in the server URL") }
         if (scheme == "http") {
             require(isLocalNetworkHost(uri.host)) {
                 tr(
@@ -71,16 +78,38 @@ internal object KoSyncClient {
     internal fun isLocalNetworkHost(host: String): Boolean {
         val normalized = host.trim().trim('[', ']').lowercase(Locale.ROOT)
         if (normalized == "localhost" || normalized.endsWith(".local")) return true
-        if (!normalized.contains('.') && !normalized.contains(':')) return true
-        val ipv4 = normalized.split('.').mapNotNull { it.toIntOrNull() }
-        if (ipv4.size == 4 && ipv4.all { it in 0..255 }) {
-            return ipv4[0] == 10 ||
-                ipv4[0] == 127 ||
-                (ipv4[0] == 172 && ipv4[1] in 16..31) ||
-                (ipv4[0] == 192 && ipv4[1] == 168) ||
-                (ipv4[0] == 169 && ipv4[1] == 254)
+        parseIpv4(normalized)?.let { return isPrivateAddress(it) }
+        if (':' in normalized) return runCatching { InetAddress.getByName(normalized) }.getOrNull()?.let(::isPrivateAddress) == true
+
+        // Hostnames, including single-label LAN names, are trusted only when every resolved
+        // address is private/local. This prevents public DNS names or rebinding targets from
+        // silently receiving credentials over cleartext HTTP.
+        val resolved = runCatching { InetAddress.getAllByName(normalized).toList() }.getOrElse { return false }
+        return resolved.isNotEmpty() && resolved.all(::isPrivateAddress)
+    }
+
+    private fun parseIpv4(host: String): InetAddress? {
+        val parts = host.split('.')
+        if (parts.size != 4) return null
+        val values = parts.map { it.toIntOrNull() ?: return null }
+        if (values.any { it !in 0..255 }) return null
+        return InetAddress.getByAddress(values.map { it.toByte() }.toByteArray())
+    }
+
+    private fun isPrivateAddress(address: InetAddress): Boolean {
+        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress) return true
+        return when (address) {
+            is Inet4Address -> {
+                val b = address.address.map { it.toInt() and 0xff }
+                b[0] == 10 || b[0] == 127 || (b[0] == 172 && b[1] in 16..31) ||
+                    (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254)
+            }
+            is Inet6Address -> {
+                val first = address.address[0].toInt() and 0xff
+                first == 0xfc || first == 0xfd || address.isLinkLocalAddress || address.isLoopbackAddress
+            }
+            else -> false
         }
-        return normalized == "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
     }
 
     internal fun endpointRoot(config: SyncConfig): String {
@@ -116,12 +145,27 @@ internal object KoSyncClient {
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
             }
         }
-        if (json != null) connection.outputStream.use { it.write(json.toByteArray(Charsets.UTF_8)) }
-        val code = connection.responseCode
-        val stream = if (code >= 400) connection.errorStream else connection.inputStream
-        val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(16_384) }.orEmpty()
-        connection.disconnect()
-        return Response(code, body)
+        return try {
+            if (json != null) connection.outputStream.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code >= 400) connection.errorStream else connection.inputStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { readBounded(it, MAX_RESPONSE_CHARS) }.orEmpty()
+            Response(code, body)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    internal fun readBounded(reader: Reader, maxChars: Int): String {
+        val out = StringBuilder(minOf(maxChars, 4096))
+        val buffer = CharArray(2048)
+        while (out.length < maxChars) {
+            val wanted = minOf(buffer.size, maxChars - out.length)
+            val count = reader.read(buffer, 0, wanted)
+            if (count < 0) break
+            out.append(buffer, 0, count)
+        }
+        return out.toString()
     }
 
     private fun syncError(code: Int, body: String, type: ServerType): IllegalStateException {

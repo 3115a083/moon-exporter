@@ -94,7 +94,7 @@ private fun MoonExporterApp(context: Context) {
     var target by remember { mutableStateOf(TransferTarget.READEST) }
     var exportMode by remember { mutableStateOf(ExportMode.MARKINGS_ONLY) }
     var normalizeReadestNames by remember { mutableStateOf(true) }
-    var status by remember { mutableStateOf(tr("Wähle eine Moon+ Backup-Datei.", "Choose a Moon+ backup file.")) }
+    var status by remember { mutableStateOf(tr("Wähle eine oder mehrere Moon+ Backup-Dateien.", "Choose one or more Moon+ backup files.")) }
     var exportProgress by remember { mutableStateOf<Float?>(null) }
     var exportFailed by remember { mutableStateOf(false) }
     var localBusy by remember { mutableStateOf(false) }
@@ -144,23 +144,29 @@ private fun MoonExporterApp(context: Context) {
         }
     }
 
-    fun startAnalysis(uri: android.net.Uri) {
-        val intent = Intent(context, AnalysisService::class.java)
-            .setAction(AnalysisService.ACTION_START)
-            .putExtra(AnalysisService.EXTRA_URI, uri.toString())
+    fun startAnalysis(uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        val intent = Intent(context, AnalysisService::class.java).setAction(AnalysisService.ACTION_START)
+        if (uris.size == 1) {
+            intent.putExtra(AnalysisService.EXTRA_URI, uris.single().toString())
+        } else {
+            intent.putStringArrayListExtra(AnalysisService.EXTRA_URIS, ArrayList(uris.map(android.net.Uri::toString)))
+        }
         ContextCompat.startForegroundService(context, intent)
     }
 
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+    val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
         exportProgress = null
         exportFailed = false
-        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        uris.forEach { uri ->
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        startAnalysis(uri)
+        startAnalysis(uris)
     }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -194,7 +200,7 @@ private fun MoonExporterApp(context: Context) {
         runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         launchWork(tr("Zuordnung abgebrochen", "Matching cancelled")) {
             status = tr("Buchdatei wird geprüft…", "Checking book file…")
-            val match = BookFileInspector.inspect(context, uri) ?: error(tr("Buchdatei konnte nicht gelesen werden", "Book file could not be read"))
+            val match = BookFileInspector.inspect(context, uri) ?: error(tr("Buchdatei konnte nicht gelesen werden oder das Format wird von Readest nicht unterstützt", "Book file could not be read or its format is not supported by Readest"))
             books = books.map { book ->
                 if (book.key != key) book else {
                     val metadataTitle = match.title?.takeIf { it.isNotBlank() && !ProgressRecovery.looksOpaque(it) }
@@ -275,7 +281,8 @@ private fun MoonExporterApp(context: Context) {
                     }
                     item {
                         StepCard("1", tr("Backup analysieren", "Analyze backup")) {
-                            Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(tr("Moon+ Backup-Datei auswählen", "Choose Moon+ backup file")) }
+                            Button(onClick = { backupPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(tr("Moon+ Backup(s) auswählen", "Choose Moon+ backup(s)")) }
+                            Text(tr("Mehrere .mrpro aus /.Moon+/Backup können gemeinsam gewählt werden. Moon Exporter sortiert sie nach Backup-Datum und führt Fortschritt und Markierungen konservativ zusammen.", "You can select multiple .mrpro files from /.Moon+/Backup together. Moon Exporter sorts them by backup date and conservatively consolidates progress and highlights."), style = MaterialTheme.typography.labelSmall)
                             TextButton(onClick = { folderPicker.launch(null) }, enabled = !busy) { Text(tr("Alternativ Moon+ Ordner verwenden", "Use Moon+ folder instead")) }
                             if (analysis.running) LinearProgressIndicator(Modifier.fillMaxWidth())
                             Text(status, style = MaterialTheme.typography.bodySmall)
@@ -296,7 +303,7 @@ private fun MoonExporterApp(context: Context) {
                                 }
                                 if (missingBookFiles > 0) {
                                     Text(tr("$missingBookFiles ausgewählte Bücher haben Fortschritt, aber noch keine sichere Buchdatei für die Zielberechnung. Sie können direkt in der jeweiligen Buchkarte zugeordnet werden.", "$missingBookFiles selected books have progress but no reliable book file for target calculation. They can be matched directly in each book card."), style = MaterialTheme.typography.bodySmall)
-                                    OutlinedButton(onClick = { multiBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream")) }, enabled = !busy) { Text(tr("Mehrere Buchdateien automatisch zuordnen", "Auto-match multiple book files")) }
+                                    OutlinedButton(onClick = { multiBookPicker.launch(arrayOf("*/*")) }, enabled = !busy) { Text(tr("Mehrere Buchdateien automatisch zuordnen", "Auto-match multiple book files")) }
                                 }
                             }
                         }
@@ -304,7 +311,7 @@ private fun MoonExporterApp(context: Context) {
                     if (books.isNotEmpty()) items(visibleBooks, key = { it.key }) { book ->
                         BookCard(book, selected[book.key] == true, { selected[book.key] = it }) {
                             pendingBookKey = book.key
-                            singleBookPicker.launch(arrayOf("application/epub+zip", "application/pdf", "application/octet-stream"))
+                            singleBookPicker.launch(arrayOf("*/*"))
                         }
                     }
                     item {
@@ -360,7 +367,7 @@ private fun MoonExporterApp(context: Context) {
                             )
                             Text(
                                 when {
-                                    localBusy -> tr("Der aktuelle Teilschritt steht oben. Bei jedem Buch werden Quelle, Hash, EPUB-Struktur, Markierungen, Buchdatei, config.json und Bibliothek einzeln angezeigt.", "The current sub-step is shown above. For each book, source, hash, EPUB structure, highlights, book file, config.json and library update are shown separately.")
+                                    localBusy -> tr("Der aktuelle Teilschritt steht oben. Der Export läuft im Foreground-Service weiter, auch wenn du die App-Oberfläche schließt.", "The current sub-step is shown above. Export continues in the foreground service even if you close the app UI.")
                                     exportFailed -> tr("Export unterbrochen oder fehlgeschlagen.", "Export interrupted or failed.")
                                     exportProgress != null && exportProgress!! >= 1f -> tr("Export erfolgreich beendet.", "Export completed successfully.")
                                     else -> tr("Export unterbrochen.", "Export interrupted.")
@@ -429,7 +436,7 @@ private fun ReadestTarget(
     SelectionRow(mode == ExportMode.MARKINGS_ONLY, tr("Nur Markierungen (.mrexpt)", "Highlights only (.mrexpt)")) { setMode(ExportMode.MARKINGS_ONLY) }
     SelectionRow(mode == ExportMode.FULL, tr("Direkt in Readest-Bibliothek", "Directly into Readest library")) { setMode(ExportMode.FULL) }
     if (mode == ExportMode.FULL) {
-        Text(tr("Schreibt Bücher direkt nach Readest/Books. Markierungen werden gegen den Text des tatsächlichen EPUB aufgelöst und nur bei eindeutigem Treffer als echte Readest-Range-CFI geschrieben; nicht auflösbare Einträge bleiben zusätzlich als .mrexpt erhalten.", "Writes books directly into Readest/Books. Highlights are resolved against the actual EPUB text and are only written as real Readest range CFIs when a reliable match is found; unresolved entries remain preserved as .mrexpt."), style = MaterialTheme.typography.labelSmall)
+        Text(tr("Schreibt EPUB, PDF, MOBI/AZW/AZW3, FB2, CBZ/ZIP, TXT und Markdown direkt nach Readest/Books. Native EPUB-Markierungen werden nur bei sicher auflösbarer CFI geschrieben; andere Markierungen bleiben verlustfrei als .mrexpt erhalten.", "Writes EPUB, PDF, MOBI/AZW/AZW3, FB2, CBZ/ZIP, TXT and Markdown directly into Readest/Books. Native EPUB highlights are written only when a reliable CFI can be resolved; other highlights remain losslessly preserved as .mrexpt."), style = MaterialTheme.typography.labelSmall)
         if (crypticCount > 0) {
             Text(tr("$crypticCount ausgewählte Moon+-Bücher haben kryptische Datei-/Hashnamen. Titel, Autor und ISBN werden soweit möglich aus EPUB, Moon+-Datenbank und Backup-Metadaten rekonstruiert.", "$crypticCount selected Moon+ books have cryptic file/hash names. Title, author and ISBN are reconstructed where possible from the EPUB, Moon+ database and backup metadata."), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
             Row(

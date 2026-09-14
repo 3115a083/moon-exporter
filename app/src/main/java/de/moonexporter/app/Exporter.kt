@@ -24,22 +24,19 @@ internal object Exporter {
         normalizeReadestNames: Boolean = true,
         onProgress: (ExportProgress) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        if (mode == ExportMode.FULL) {
+        if (!includeDiagnostics) {
             val store = TransferStore(context.applicationContext)
             val pending = store.latestUnfinishedSession()
             val sessionId = when (ManualSessionPolicy.decide(pending?.targetUri?.toString(), targetTree.toString())) {
-                ManualSessionDecision.CREATE_NEW -> store.createSession(targetTree, normalizeReadestNames, books)
+                ManualSessionDecision.CREATE_NEW -> store.createSession(targetTree, normalizeReadestNames, books, mode)
                 ManualSessionDecision.SUPERSEDE_AND_CREATE -> {
-                    // A manual retry uses the current analysis/selection, never a stale payload
-                    // from an older interrupted app version. Successfully committed books remain
-                    // available through completed_books and are revalidated by ExportService.
                     requireNotNull(pending)
                     store.setSessionStatus(pending.id, "SUPERSEDED")
-                    store.createSession(targetTree, normalizeReadestNames, books)
+                    store.createSession(targetTree, normalizeReadestNames, books, mode)
                 }
                 ManualSessionDecision.BLOCK_OTHER_TARGET -> {
                     store.close()
-                    error(tr("Es existiert noch ein unterbrochener Readest-Export für ein anderes Ziel. Öffne die App erneut mit Zugriff auf dieses Ziel oder beende/repariere zuerst diesen Auftrag.", "An interrupted Readest export for another target still exists. Resume or repair it before starting a different target."))
+                    error(tr("Es existiert noch ein unterbrochener Export für ein anderes Ziel. Öffne die App erneut mit Zugriff auf dieses Ziel oder beende/repariere zuerst diesen Auftrag.", "An interrupted export for another target still exists. Resume or repair it before starting a different target."))
                 }
             }
             val intent = Intent(context, ExportService::class.java)
@@ -53,7 +50,7 @@ internal object Exporter {
                     if (state.sessionId == sessionId) onProgress(ExportProgress(state.status, state.fraction))
                     when (store.session(sessionId)?.status) {
                         "DONE" -> {
-                            onProgress(ExportProgress(tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified."), 1f))
+                            onProgress(ExportProgress(tr("Export abgeschlossen und geprüft.", "Export completed and verified."), 1f))
                             return@withContext
                         }
                         "INTERRUPTED" -> {
@@ -72,6 +69,8 @@ internal object Exporter {
             } finally { store.close() }
         }
 
+        // Diagnostics are intentionally an explicit foreground/UI operation and are never part of
+        // normal user exports. Keeping this fallback avoids persisting diagnostic-only data.
         val root = DocumentFile.fromTreeUri(context, targetTree) ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
         val created = mutableListOf<DocumentFile>()
         try {
@@ -87,11 +86,9 @@ internal object Exporter {
                     writeText(context, file, mrexptFor(book))
                 }
             }
-            if (includeDiagnostics) {
-                onProgress(ExportProgress(tr("Diagnosebericht schreiben", "Writing diagnostic report"), 0.95f))
-                val diagnostic = createUnique(root, "moon-exporter-diagnostic.json", "application/json").also(created::add)
-                writeText(context, diagnostic, diagnosticJson(books, mode))
-            }
+            onProgress(ExportProgress(tr("Diagnosebericht schreiben", "Writing diagnostic report"), 0.95f))
+            val diagnostic = createUnique(root, "moon-exporter-diagnostic.json", "application/json").also(created::add)
+            writeText(context, diagnostic, diagnosticJson(books, mode))
         } catch (t: Throwable) {
             created.asReversed().forEach { runCatching { it.delete() } }
             throw t
@@ -128,6 +125,17 @@ internal object Exporter {
         }
     }
 
+    internal fun markingsFileName(book: BookItem): String =
+        "${safeName(book.title)}-${TransferStore.stableSuffix(book.key)}.mrexpt"
+
+    internal fun writeMarkingsFile(context: Context, root: DocumentFile, book: BookItem) {
+        if (!book.hasAnnotations) return
+        val name = markingsFileName(book)
+        val file = root.findFile(name) ?: root.createFile("text/plain", name)
+            ?: error(tr("Datei konnte nicht angelegt werden: $name", "Could not create file: $name"))
+        writeText(context, file, mrexptFor(book))
+    }
+
     private fun createUnique(root: DocumentFile, requested: String, mime: String): DocumentFile {
         val base = requested.substringBeforeLast('.', requested)
         val ext = requested.substringAfterLast('.', "").let { if (it == requested) "" else ".$it" }
@@ -138,8 +146,10 @@ internal object Exporter {
     }
 
     private fun writeText(context: Context, file: DocumentFile, text: String) {
-        context.contentResolver.openOutputStream(file.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
-            ?: error(tr("Datei konnte nicht geschrieben werden", "Could not write file"))
+        context.contentResolver.openOutputStream(file.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { writer ->
+            writer.write(text)
+            writer.flush()
+        } ?: error(tr("Datei konnte nicht geschrieben werden", "Could not write file"))
     }
 
     private fun diagnosticJson(books: List<BookItem>, mode: ExportMode): String = buildString {

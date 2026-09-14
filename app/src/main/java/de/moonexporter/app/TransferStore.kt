@@ -26,21 +26,24 @@ internal data class StoredTransferSession(
     val targetUri: Uri,
     val normalizeNames: Boolean,
     val status: String,
+    val mode: ExportMode,
 )
 
 /** App-private checkpoint DB. Android removes it automatically when the app is uninstalled. */
-internal class TransferStore(context: Context) : SQLiteOpenHelper(context, "moon_exporter_state.db", null, 1) {
+internal class TransferStore(context: Context) : SQLiteOpenHelper(context, "moon_exporter_state.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE transfer_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, target_uri TEXT NOT NULL, normalize_names INTEGER NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE transfer_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, target_uri TEXT NOT NULL, normalize_names INTEGER NOT NULL, mode TEXT NOT NULL DEFAULT 'FULL', status TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE transfer_items (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, book_key TEXT NOT NULL, fingerprint TEXT NOT NULL, payload_json TEXT NOT NULL, state TEXT NOT NULL, target_hash TEXT, error TEXT, updated_at INTEGER NOT NULL, UNIQUE(session_id, book_key))")
         db.execSQL("CREATE INDEX idx_transfer_items_session ON transfer_items(session_id, ordinal)")
         db.execSQL("CREATE TABLE completed_books (target_uri TEXT NOT NULL, book_key TEXT NOT NULL, fingerprint TEXT NOT NULL, target_hash TEXT, completed_at INTEGER NOT NULL, PRIMARY KEY(target_uri, book_key))")
         db.execSQL("CREATE TABLE analysis_cache (slot INTEGER PRIMARY KEY CHECK(slot=1), source_uri TEXT NOT NULL, source_fingerprint TEXT NOT NULL, books_json TEXT NOT NULL, updated_at INTEGER NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE transfer_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'FULL'")
+    }
 
-    fun createSession(targetUri: Uri, normalizeNames: Boolean, books: List<BookItem>): Long {
+    fun createSession(targetUri: Uri, normalizeNames: Boolean, books: List<BookItem>, mode: ExportMode = ExportMode.FULL): Long {
         val now = System.currentTimeMillis()
         val db = writableDatabase
         db.beginTransaction()
@@ -48,6 +51,7 @@ internal class TransferStore(context: Context) : SQLiteOpenHelper(context, "moon
             val values = ContentValues().apply {
                 put("target_uri", targetUri.toString())
                 put("normalize_names", if (normalizeNames) 1 else 0)
+                put("mode", mode.name)
                 put("status", "PENDING")
                 put("created_at", now)
                 put("updated_at", now)
@@ -71,18 +75,26 @@ internal class TransferStore(context: Context) : SQLiteOpenHelper(context, "moon
     }
 
     fun latestUnfinishedSession(): StoredTransferSession? {
-        readableDatabase.rawQuery("SELECT id,target_uri,normalize_names,status FROM transfer_sessions WHERE status IN ('PENDING','RUNNING','INTERRUPTED') ORDER BY id DESC LIMIT 1", null).use { c ->
+        readableDatabase.rawQuery("SELECT id,target_uri,normalize_names,status,mode FROM transfer_sessions WHERE status IN ('PENDING','RUNNING','INTERRUPTED') ORDER BY id DESC LIMIT 1", null).use { c ->
             if (!c.moveToFirst()) return null
-            return StoredTransferSession(c.getLong(0), Uri.parse(c.getString(1)), c.getInt(2) != 0, c.getString(3))
+            return sessionFromCursor(c)
         }
     }
 
     fun session(id: Long): StoredTransferSession? {
-        readableDatabase.rawQuery("SELECT id,target_uri,normalize_names,status FROM transfer_sessions WHERE id=?", arrayOf(id.toString())).use { c ->
+        readableDatabase.rawQuery("SELECT id,target_uri,normalize_names,status,mode FROM transfer_sessions WHERE id=?", arrayOf(id.toString())).use { c ->
             if (!c.moveToFirst()) return null
-            return StoredTransferSession(c.getLong(0), Uri.parse(c.getString(1)), c.getInt(2) != 0, c.getString(3))
+            return sessionFromCursor(c)
         }
     }
+
+    private fun sessionFromCursor(c: android.database.Cursor): StoredTransferSession = StoredTransferSession(
+        id = c.getLong(0),
+        targetUri = Uri.parse(c.getString(1)),
+        normalizeNames = c.getInt(2) != 0,
+        status = c.getString(3),
+        mode = runCatching { ExportMode.valueOf(c.getString(4)) }.getOrDefault(ExportMode.FULL),
+    )
 
     fun items(sessionId: Long): List<StoredTransferItem> {
         val out = mutableListOf<StoredTransferItem>()
@@ -160,6 +172,8 @@ internal class TransferStore(context: Context) : SQLiteOpenHelper(context, "moon
             val doc = DocumentFile.fromSingleUri(context, uri) ?: return null
             return "${uri}|${doc.length()}|${doc.lastModified()}"
         }
+
+        internal fun stableSuffix(value: String): String = sha256(value).take(10)
 
         private fun sha256(text: String): String = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 
