@@ -14,13 +14,14 @@ internal data class MoonBackupDescriptor(
  * Newer records win only when they are actually newer; annotations are unioned losslessly.
  */
 internal object BackupConsolidator {
-    private val backupName = Regex("^(\\d{4}-\\d{2}-\\d{2})\\s+(.+?)\\s+Backup(?:\\s*\\([^)]*\\))?\\.mrpro$", RegexOption.IGNORE_CASE)
+    private val backupName = Regex("^(\\d{4}-\\d{2}-\\d{2})\\s+(.+?)\\s+Backup(?:\\s*\\(([^)]*)\\))?\\.mrpro$", RegexOption.IGNORE_CASE)
 
     fun describe(displayName: String): MoonBackupDescriptor {
         val match = backupName.matchEntire(displayName.trim())
         val date = match?.groupValues?.getOrNull(1)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-        val device = match?.groupValues?.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }
-        return MoonBackupDescriptor(displayName, date, device)
+        val label = match?.groupValues?.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }
+        val parenthesizedDevice = match?.groupValues?.getOrNull(3)?.trim()?.takeIf { it.isNotBlank() }
+        return MoonBackupDescriptor(displayName, date, parenthesizedDevice ?: label)
     }
 
     fun consolidate(backupsOldestToNewest: List<List<BookItem>>): List<BookItem> {
