@@ -39,7 +39,7 @@ class HardeningTest {
     @Test fun `backup name exposes date and device`() {
         val descriptor = BackupConsolidator.describe("2024-01-19 Boox Backup (Nova3Color).mrpro")
         assertEquals("2024-01-19", descriptor.date.toString())
-        assertEquals("Boox", descriptor.deviceName)
+        assertEquals("Nova3Color", descriptor.deviceName)
     }
 
     @Test fun `newest timestamp wins while annotations are unioned`() {
