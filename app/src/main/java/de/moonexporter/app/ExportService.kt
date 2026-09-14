@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -70,11 +71,59 @@ class ExportService : Service() {
         val items = store.items(sessionId)
         if (items.isEmpty()) return
         store.setSessionStatus(sessionId, "RUNNING")
-        startForeground(NOTIFICATION_ID, notification(tr("Readest-Export wird vorbereitet…", "Preparing Readest export…"), 0, items.size, true))
+        startForeground(NOTIFICATION_ID, notification(tr("Export wird vorbereitet…", "Preparing export…"), 0, items.size, true))
+        if (session.mode == ExportMode.MARKINGS_ONLY) {
+            startMarkingsSession(session, items)
+            return
+        }
+        startReadestSession(session, items)
+    }
+
+    private fun startMarkingsSession(session: StoredTransferSession, items: List<StoredTransferItem>) {
+        exportJob = scope.launch {
+            var done = items.count { it.state == "DONE" }
+            ExportState.update(ExportSnapshot(true, session.id, tr("Markierungsexport wird vorbereitet…", "Preparing highlights export…"), done.toFloat() / items.size, done, items.size))
+            try {
+                val root = DocumentFile.fromTreeUri(this@ExportService, session.targetUri)
+                    ?: error(tr("Exportziel nicht verfügbar", "Export destination unavailable"))
+                for ((index, item) in items.withIndex()) {
+                    coroutineContext.ensureActive()
+                    if (item.state == "DONE") continue
+                    val label = tr(
+                        "Buch ${index + 1}/${items.size}: Markierungen sichern · ${item.book.title}",
+                        "Book ${index + 1}/${items.size}: saving highlights · ${item.book.title}",
+                    )
+                    publish(session.id, done, items.size, label)
+                    if (item.book.hasAnnotations) Exporter.writeMarkingsFile(this@ExportService, root, item.book)
+                    store.setItemState(item.id, "DONE")
+                    done++
+                    publish(session.id, done, items.size, label)
+                }
+                store.setSessionStatus(session.id, "DONE")
+                val text = tr("Markierungsexport abgeschlossen.", "Highlights export complete.")
+                ExportState.update(ExportSnapshot(false, session.id, text, 1f, done, items.size))
+                notifyProgress(text, done, items.size, false)
+            } catch (_: CancellationException) {
+                store.setSessionStatus(session.id, "INTERRUPTED")
+                val text = tr("Export unterbrochen. Er wird beim nächsten Start fortgesetzt.", "Export interrupted. It will resume on the next start.")
+                ExportState.update(ExportSnapshot(false, session.id, text, done.toFloat() / items.size, done, items.size))
+                notifyProgress(text, done, items.size, false)
+            } catch (t: Throwable) {
+                store.setSessionStatus(session.id, "INTERRUPTED")
+                val text = StorageSafety.userMessage(t) ?: t.message ?: tr("Export unterbrochen", "Export interrupted")
+                ExportState.update(ExportSnapshot(false, session.id, text, done.toFloat() / items.size, done, items.size, text))
+                notifyProgress(text, done, items.size, false)
+            } finally {
+                finishService()
+            }
+        }
+    }
+
+    private fun startReadestSession(session: StoredTransferSession, items: List<StoredTransferItem>) {
         exportJob = scope.launch {
             var done = 0
             var skipped = 0
-            ExportState.update(ExportSnapshot(true, sessionId, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), 0f, 0, items.size))
+            ExportState.update(ExportSnapshot(true, session.id, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), 0f, 0, items.size))
             try {
                 ReadestTargetAudit.cleanupTargetParts(this@ExportService, session.targetUri)
                 for ((itemIndex, item) in items.withIndex()) {
@@ -96,7 +145,7 @@ class ExportService : Service() {
                         store.setItemState(item.id, "SKIPPED_NO_SOURCE", error = reason)
                         skipped++
                         done++
-                        publish(sessionId, done, items.size, reason)
+                        publish(session.id, done, items.size, reason)
                         continue
                     }
 
@@ -107,7 +156,7 @@ class ExportService : Service() {
                             store.setItemState(item.id, "DONE", knownHash)
                             store.rememberCompleted(session.targetUri, item, knownHash)
                             done++
-                            publish(sessionId, done, items.size, tr("Bereits vollständig: ${item.book.title}", "Already complete: ${item.book.title}"))
+                            publish(session.id, done, items.size, tr("Bereits vollständig: ${item.book.title}", "Already complete: ${item.book.title}"))
                             continue
                         }
                     }
@@ -128,7 +177,7 @@ class ExportService : Service() {
                         } else {
                             tr("Zweiter Reparaturversuch: ${item.book.title}", "Second repair attempt: ${item.book.title}")
                         }
-                        publish(sessionId, done, items.size, attemptLabel)
+                        publish(session.id, done, items.size, attemptLabel)
 
                         val precheck = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, expectedHash, item.book.epub?.size)
                         if (precheck.complete) {
@@ -136,7 +185,7 @@ class ExportService : Service() {
                             store.setItemState(item.id, "DONE", expectedHash)
                             store.rememberCompleted(session.targetUri, item, expectedHash)
                             done++
-                            publish(sessionId, done, items.size, tr("Repariert und geprüft: ${item.book.title}", "Repaired and verified: ${item.book.title}"))
+                            publish(session.id, done, items.size, tr("Repariert und geprüft: ${item.book.title}", "Repaired and verified: ${item.book.title}"))
                             committed = true
                             break
                         }
@@ -147,7 +196,7 @@ class ExportService : Service() {
                                 val base = done.toFloat() / items.size
                                 val local = p.fraction ?: 0f
                                 val message = overallBookProgress(p.message, itemIndex, items.size)
-                                ExportState.update(ExportSnapshot(true, sessionId, message, (base + local / items.size).coerceIn(0f, 1f), done, items.size))
+                                ExportState.update(ExportSnapshot(true, session.id, message, (base + local / items.size).coerceIn(0f, 1f), done, items.size))
                                 notifyProgress(message, done, items.size)
                             }
                             knownHash = expectedHash
@@ -156,7 +205,7 @@ class ExportService : Service() {
                                 store.setItemState(item.id, "DONE", expectedHash)
                                 store.rememberCompleted(session.targetUri, item, expectedHash)
                                 done++
-                                publish(sessionId, done, items.size, tr("Gesichert und geprüft: ${item.book.title}", "Committed and verified: ${item.book.title}"))
+                                publish(session.id, done, items.size, tr("Gesichert und geprüft: ${item.book.title}", "Committed and verified: ${item.book.title}"))
                                 committed = true
                                 break
                             }
@@ -175,7 +224,7 @@ class ExportService : Service() {
                     if (!committed) throw lastFailure ?: IllegalStateException(tr("Buch konnte nach zwei Versuchen nicht repariert werden", "Book could not be repaired after two attempts"))
                 }
                 ReadestTargetAudit.cleanupRecoveryArtifacts(this@ExportService, session.targetUri)
-                store.setSessionStatus(sessionId, "DONE")
+                store.setSessionStatus(session.id, "DONE")
                 val text = if (skipped > 0) {
                     tr(
                         "Readest-Export abgeschlossen und geprüft. $skipped Buch/Bücher ohne verwendbare Buchdatei wurden übersprungen.",
@@ -184,23 +233,27 @@ class ExportService : Service() {
                 } else {
                     tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified.")
                 }
-                ExportState.update(ExportSnapshot(false, sessionId, text, 1f, done - skipped, items.size))
+                ExportState.update(ExportSnapshot(false, session.id, text, 1f, done - skipped, items.size))
                 notifyProgress(text, done, items.size, false)
             } catch (_: CancellationException) {
-                store.setSessionStatus(sessionId, "INTERRUPTED")
+                store.setSessionStatus(session.id, "INTERRUPTED")
                 val text = tr("Export unterbrochen. Er wird beim nächsten Start fortgesetzt.", "Export interrupted. It will resume on the next start.")
-                ExportState.update(ExportSnapshot(false, sessionId, text, done.toFloat() / items.size, done - skipped, items.size))
+                ExportState.update(ExportSnapshot(false, session.id, text, done.toFloat() / items.size, done - skipped, items.size))
                 notifyProgress(text, done, items.size, false)
             } catch (t: Throwable) {
-                store.setSessionStatus(sessionId, "INTERRUPTED")
+                store.setSessionStatus(session.id, "INTERRUPTED")
                 val text = StorageSafety.userMessage(t) ?: t.message ?: tr("Export unterbrochen", "Export interrupted")
-                ExportState.update(ExportSnapshot(false, sessionId, text, done.toFloat() / items.size, done - skipped, items.size, text))
+                ExportState.update(ExportSnapshot(false, session.id, text, done.toFloat() / items.size, done - skipped, items.size, text))
                 notifyProgress(text, done, items.size, false)
             } finally {
-                stopForeground(STOP_FOREGROUND_DETACH)
-                stopSelf()
+                finishService()
             }
         }
+    }
+
+    private fun finishService() {
+        stopForeground(STOP_FOREGROUND_DETACH)
+        stopSelf()
     }
 
     private fun publish(sessionId: Long, done: Int, total: Int, text: String) {
@@ -217,7 +270,7 @@ class ExportService : Service() {
         val pending = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(tr("Readest-Export", "Readest export"))
+            .setContentTitle(tr("Moon Exporter", "Moon Exporter"))
             .setContentText(text)
             .setContentIntent(pending)
             .setOnlyAlertOnce(true)
@@ -229,8 +282,8 @@ class ExportService : Service() {
     }
 
     private fun createChannel() {
-        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, tr("Readest-Export", "Readest export"), NotificationManager.IMPORTANCE_LOW).apply {
-            description = tr("Zuverlässiger Readest-Export im Hintergrund", "Reliable Readest export in the background")
+        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, tr("Moon Export", "Moon Export"), NotificationManager.IMPORTANCE_LOW).apply {
+            description = tr("Zuverlässiger Export im Hintergrund", "Reliable export in the background")
             setShowBadge(false)
         })
     }
