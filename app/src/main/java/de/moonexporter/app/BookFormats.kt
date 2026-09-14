@@ -12,6 +12,12 @@ internal object BookFormats {
     fun isReadestCompatible(fileName: String, fallback: String = ""): Boolean =
         extension(fileName, fallback) in readestCompatible
 
+    fun readestFormat(extension: String): String = when (extension.lowercase(Locale.ROOT)) {
+        "zip" -> "CBZ"
+        "md" -> "MD"
+        else -> extension.uppercase(Locale.ROOT)
+    }
+
     fun mime(extension: String): String = when (extension.lowercase(Locale.ROOT)) {
         "epub" -> "application/epub+zip"
         "pdf" -> "application/pdf"
