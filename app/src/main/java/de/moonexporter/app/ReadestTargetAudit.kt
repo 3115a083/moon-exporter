@@ -49,8 +49,9 @@ internal object ReadestTargetAudit {
         repairLibraryIfNeeded(context, root)
         val dir = root.findFile(targetHash)?.takeIf { it.isDirectory } ?: return Validation(false, "Buchordner fehlt")
         cleanupPartFiles(dir)
-        val book = dir.listFiles().firstOrNull { it.isFile && it.name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT) in setOf("epub", "pdf") }
-            ?: return Validation(false, "Buchdatei fehlt")
+        val book = dir.listFiles().firstOrNull {
+            it.isFile && it.name?.let(BookFormats::isReadestCompatible) == true
+        } ?: return Validation(false, "Buchdatei fehlt")
         if (expectedSize != null && expectedSize > 0L && book.length() != expectedSize) {
             runCatching { book.delete() }
             return Validation(false, "Unvollständige Buchdatei entfernt")
@@ -67,9 +68,7 @@ internal object ReadestTargetAudit {
         var configText = readText(context, config, 8 * 1024 * 1024)
         if (configText == null || runCatching { JSONObject(configText) }.isFailure) {
             val repairedFromBackup = restoreBackup(context, dir, "config.moon-exporter.bak.json", config)
-            if (!repairedFromBackup && dir.findFile("config.moon-exporter.bak.json") == null) {
-                overwriteText(context, config, "{}")
-            }
+            if (!repairedFromBackup && dir.findFile("config.moon-exporter.bak.json") == null) overwriteText(context, config, "{}")
             configText = readText(context, config, 8 * 1024 * 1024)
             if (configText == null || runCatching { JSONObject(configText) }.isFailure) return Validation(false, "config.json ungültig")
             return Validation(false, if (repairedFromBackup) "Unterbrochene config.json aus Sicherung repariert" else "Unterbrochene erste config.json zurückgesetzt")
@@ -106,9 +105,7 @@ internal object ReadestTargetAudit {
         val current = readText(context, library, 16 * 1024 * 1024)
         if (current != null && runCatching { JSONArray(current) }.isSuccess) return
         val repairedFromBackup = restoreBackup(context, root, "library.moon-exporter.bak.json", library)
-        if (!repairedFromBackup && root.findFile("library.moon-exporter.bak.json") == null) {
-            overwriteText(context, library, "[]")
-        }
+        if (!repairedFromBackup && root.findFile("library.moon-exporter.bak.json") == null) overwriteText(context, library, "[]")
     }
 
     private fun restoreBackup(context: Context, dir: DocumentFile, backupName: String, target: DocumentFile): Boolean {
