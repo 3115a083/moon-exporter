@@ -64,7 +64,8 @@ internal object UniversalReadestExporter {
         }
 
         withPreparedSource(context, source, ext) { local ->
-            val hash = local.inputStream().buffered().use(ReadestDirectExporter::readestPartialMd5)
+            val hash = source.partialMd5?.takeIf { it.matches(Regex("^[0-9a-fA-F]{32}$")) }?.lowercase()
+                ?: local.inputStream().buffered().use(ReadestDirectExporter::readestPartialMd5)
             val dir = booksRoot.findFile(hash)?.takeIf { it.isDirectory } ?: booksRoot.createDirectory(hash)
                 ?: error(tr("Readest-Buchordner konnte nicht angelegt werden", "Could not create Readest book folder"))
             val existing = dir.listFiles().firstOrNull { it.isFile && it.name?.let(BookFormats::isReadestCompatible) == true }
@@ -102,7 +103,7 @@ internal object UniversalReadestExporter {
             if (!config.has("searchConfig")) config.put("searchConfig", JSONObject())
             config.put("updatedAt", now)
             writeText(context, configFile, config.toString())
-            if (book.hasAnnotations) writeOrReplace(context, dir, "moon-export.mrexpt", "text/plain", Exporter.mrexptFor(book))
+            if (book.hasAnnotations) writeCanonicalMrexpt(context, dir, Exporter.mrexptFor(book))
 
             val libraryFile = booksRoot.findFile("library.json") ?: booksRoot.createFile("application/json", "library.json")
                 ?: error(tr("library.json konnte nicht angelegt werden", "Could not create library.json"))
@@ -166,6 +167,7 @@ internal object UniversalReadestExporter {
             return
         }
         if (source.backupUri != null && !source.archiveEntryName.isNullOrBlank()) {
+            if (BackupArchiveCache.copyEntry(source, output)) return
             val wanted = source.archiveEntryName.replace('\\', '/').trimStart('/')
             var found = false
             context.contentResolver.openInputStream(source.backupUri)?.buffered()?.use { raw ->
@@ -199,6 +201,18 @@ internal object UniversalReadestExporter {
     private fun writeText(context: Context, file: DocumentFile, text: String) {
         context.contentResolver.openOutputStream(file.uri, "w")?.bufferedWriter(Charsets.UTF_8)?.use { writer -> writer.write(text); writer.flush() }
             ?: error(tr("Datei konnte nicht geschrieben werden", "Could not write file"))
+    }
+
+    private fun writeCanonicalMrexpt(context: Context, dir: DocumentFile, text: String) {
+        val canonicalName = "moon-export.mrexpt"
+        val candidates = dir.listFiles().filter { file ->
+            file.isFile && file.name?.lowercase()?.startsWith(canonicalName) == true
+        }
+        val canonical = candidates.firstOrNull { it.name.equals(canonicalName, true) }
+        candidates.filter { it != canonical }.forEach { runCatching { it.delete() } }
+        val file = canonical ?: dir.createFile("application/octet-stream", canonicalName)
+            ?: error(tr("Datei konnte nicht angelegt werden: $canonicalName", "Could not create file: $canonicalName"))
+        writeText(context, file, text)
     }
 
     private fun writeOrReplace(context: Context, dir: DocumentFile, name: String, mime: String, text: String) {
