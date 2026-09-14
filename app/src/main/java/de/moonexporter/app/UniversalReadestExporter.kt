@@ -10,7 +10,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.OutputStream
-import java.util.Locale
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.coroutineContext
 import kotlin.math.roundToInt
@@ -122,7 +121,7 @@ internal object UniversalReadestExporter {
                 array.put(row)
             }
             row.put("hash", hash)
-            row.put("format", ext.uppercase(Locale.ROOT))
+            row.put("format", BookFormats.readestFormat(ext))
             row.put("title", book.title)
             row.put("sourceTitle", book.title)
             book.author?.takeIf { it.isNotBlank() }?.let { row.put("author", it) }
