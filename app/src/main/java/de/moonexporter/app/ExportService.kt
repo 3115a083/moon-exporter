@@ -77,7 +77,7 @@ class ExportService : Service() {
             ExportState.update(ExportSnapshot(true, sessionId, tr("Readest-Ziel wird geprüft…", "Checking Readest target…"), 0f, 0, items.size))
             try {
                 ReadestTargetAudit.cleanupTargetParts(this@ExportService, session.targetUri)
-                for (item in items) {
+                for ((itemIndex, item) in items.withIndex()) {
                     coroutineContext.ensureActive()
 
                     if (!item.book.hasBookFile) {
@@ -113,6 +113,7 @@ class ExportService : Service() {
                     }
 
                     val source = item.book.epub ?: error(tr("Keine Buchdatei für ${item.book.title} gespeichert", "No book source stored for ${item.book.title}"))
+                    StorageSafety.ensureCacheCapacity(this@ExportService, source.size)
                     val expectedHash = ReadestIdentity.sourceHash(this@ExportService, source)
                         ?: error(tr("Readest-Buch-ID konnte vor dem Export nicht aus der gespeicherten Quelle berechnet werden: ${item.book.title}", "Could not calculate Readest book ID from the persisted source before export: ${item.book.title}"))
                     if (knownHash == null) knownHash = expectedHash
@@ -145,8 +146,9 @@ class ExportService : Service() {
                             ReadestDirectExporter.export(this@ExportService, session.targetUri, listOf(item.book), session.normalizeNames) { p ->
                                 val base = done.toFloat() / items.size
                                 val local = p.fraction ?: 0f
-                                ExportState.update(ExportSnapshot(true, sessionId, p.message, (base + local / items.size).coerceIn(0f, 1f), done, items.size))
-                                notifyProgress(p.message, done, items.size)
+                                val message = overallBookProgress(p.message, itemIndex, items.size)
+                                ExportState.update(ExportSnapshot(true, sessionId, message, (base + local / items.size).coerceIn(0f, 1f), done, items.size))
+                                notifyProgress(message, done, items.size)
                             }
                             knownHash = expectedHash
                             val validation = ReadestTargetAudit.validateKnownBook(this@ExportService, session.targetUri, expectedHash, item.book.epub?.size)
@@ -166,6 +168,7 @@ class ExportService : Service() {
                             if (t is CancellationException) throw t
                             knownHash = expectedHash
                             lastFailure = t
+                            if (StorageSafety.userMessage(t) != null) break
                         }
                         store.setItemState(item.id, "INTERRUPTED", expectedHash, lastFailure?.message)
                     }
@@ -181,17 +184,17 @@ class ExportService : Service() {
                 } else {
                     tr("Readest-Export abgeschlossen und geprüft.", "Readest export completed and verified.")
                 }
-                ExportState.update(ExportSnapshot(false, sessionId, text, 1f, items.size, items.size))
-                notifyProgress(text, items.size, items.size, false)
+                ExportState.update(ExportSnapshot(false, sessionId, text, 1f, done - skipped, items.size))
+                notifyProgress(text, done, items.size, false)
             } catch (_: CancellationException) {
                 store.setSessionStatus(sessionId, "INTERRUPTED")
                 val text = tr("Export unterbrochen. Er wird beim nächsten Start fortgesetzt.", "Export interrupted. It will resume on the next start.")
-                ExportState.update(ExportSnapshot(false, sessionId, text, done.toFloat() / items.size, done, items.size))
+                ExportState.update(ExportSnapshot(false, sessionId, text, done.toFloat() / items.size, done - skipped, items.size))
                 notifyProgress(text, done, items.size, false)
             } catch (t: Throwable) {
                 store.setSessionStatus(sessionId, "INTERRUPTED")
-                val text = t.message ?: tr("Export unterbrochen", "Export interrupted")
-                ExportState.update(ExportSnapshot(false, sessionId, text, done.toFloat() / items.size, done, items.size, text))
+                val text = StorageSafety.userMessage(t) ?: t.message ?: tr("Export unterbrochen", "Export interrupted")
+                ExportState.update(ExportSnapshot(false, sessionId, text, done.toFloat() / items.size, done - skipped, items.size, text))
                 notifyProgress(text, done, items.size, false)
             } finally {
                 stopForeground(STOP_FOREGROUND_DETACH)
@@ -248,5 +251,11 @@ class ExportService : Service() {
         const val EXTRA_SESSION_ID = "session_id"
         private const val CHANNEL_ID = "readest_export"
         private const val NOTIFICATION_ID = 4102
+
+        internal fun overallBookProgress(message: String, zeroBasedIndex: Int, total: Int): String {
+            if (total <= 0) return message
+            val replacement = if (message.startsWith("Book ")) "Book ${zeroBasedIndex + 1}/$total" else "Buch ${zeroBasedIndex + 1}/$total"
+            return message.replaceFirst(Regex("^(Buch|Book)\\s+1/1"), replacement)
+        }
     }
 }
