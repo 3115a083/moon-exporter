@@ -26,7 +26,10 @@ class MoonExporterApplication : Application(), Application.ActivityLifecycleCall
         val store = TransferStore(this)
         try {
             val pending = store.latestUnfinishedSession()
-            val sourceReady = pending?.let { session -> store.items(session.id).map { it.book.hasBookFile } }.orEmpty()
+            val sourceReady = pending?.let { session ->
+                if (session.mode == ExportMode.MARKINGS_ONLY) listOf(true)
+                else store.items(session.id).map { it.book.hasBookFile }
+            }.orEmpty()
             if (pending != null && ManualSessionPolicy.canAutoResume(sourceReady)) {
                 runCatching {
                     ContextCompat.startForegroundService(this, Intent(this, ExportService::class.java).setAction(ExportService.ACTION_RESUME))
