@@ -14,8 +14,39 @@ class MoonExporterApplication : Application(), Application.ActivityLifecycleCall
         registerActivityLifecycleCallbacks(this)
         val store = TransferStore(this)
         try {
-            store.loadLatestAnalysis(this)?.takeIf { it.isNotEmpty() }?.let { books ->
-                AnalysisState.complete(books, tr("Letztes unverändertes Einlesen wiederhergestellt.", "Restored the last unchanged scan."))
+            val pending = store.latestUnfinishedSession()
+            val pendingItems = pending?.let { store.items(it.id) }.orEmpty()
+            if (pending != null && pendingItems.isNotEmpty()) {
+                val processed = pendingItems.count { it.state == "DONE" || it.state.startsWith("SKIPPED") }
+                val exported = pendingItems.count { it.state == "DONE" }
+                val total = pendingItems.size
+                val fraction = processed.toFloat() / total.toFloat()
+                val text = when (pending.status) {
+                    "INTERRUPTED" -> tr(
+                        "Unterbrochener Readest-Export wiederhergestellt: $processed/$total verarbeitet.",
+                        "Restored interrupted Readest export: $processed/$total processed.",
+                    )
+                    else -> tr(
+                        "Laufender Readest-Export wiederhergestellt: $processed/$total verarbeitet.",
+                        "Restored running Readest export: $processed/$total processed.",
+                    )
+                }
+                AnalysisState.complete(pendingItems.map { it.book }, text)
+                ExportState.update(
+                    ExportSnapshot(
+                        running = pending.status != "INTERRUPTED",
+                        sessionId = pending.id,
+                        status = text,
+                        fraction = fraction,
+                        completedBooks = exported,
+                        totalBooks = total,
+                        error = pendingItems.firstNotNullOfOrNull { it.error },
+                    ),
+                )
+            } else {
+                store.loadLatestAnalysis(this)?.takeIf { it.isNotEmpty() }?.let { books ->
+                    AnalysisState.complete(books, tr("Letztes unverändertes Einlesen wiederhergestellt.", "Restored the last unchanged scan."))
+                }
             }
         } finally { store.close() }
     }
