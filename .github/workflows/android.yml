@@ -22,7 +22,7 @@ jobs:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.11.1'
+          gradle-version: '8.14.4'
       - name: Privacy source scan
         run: |
           ! grep -RniE '3115a083/MoonDav|de\.moondav|MoonDav' app README.md SECURITY.md docs CHANGELOG.md
